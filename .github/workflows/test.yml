@@ -86,3 +86,56 @@ jobs:
         env:
           BROTLI_TEST_STRICT: "1"
         run: tests/run-tests.sh
+
+  e2e:
+    name: e2e (kind)
+    # a real Kubernetes cluster (kind), real registry, real kubectl exec /
+    # crane / docker; test images are built from the fixture binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends busybox-static dash cmake jq binutils
+
+      - name: Cache downloads and builds
+        if: github.event_name != 'schedule'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            tests/.cache/brotli
+            tests/.cache/build-*
+            tests/.cache/src-*
+            tests/.cache/py-*
+            tests/.cache/node-*
+            tests/.cache/ubuntu
+            tests/.cache/msdotnet
+            tests/.cache/runtimes
+            tests/.cache/pylib
+            tests/.cache/sarif-schema-2.1.0.json
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh') }}
+
+      - name: Build fixtures (downloads; network on)
+        env:
+          BROTLI_TEST_STRICT: "1"
+        run: tests/build-fixtures.sh
+
+      - name: Install kind and crane (pinned, checksum-verified)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" && cd "$RUNNER_TEMP/bin"
+          curl -fsSL -o kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  kind" | sha256sum -c
+          curl -fsSL -o ggcr.tgz https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz
+          echo "0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0  ggcr.tgz" | sha256sum -c
+          tar -xzf ggcr.tgz crane && rm ggcr.tgz && chmod +x kind crane
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: End-to-end test on a kind cluster
+        run: |
+          kubectl version --client
+          tests/e2e-kind.sh

@@ -31,6 +31,11 @@ tests/run-tests.sh        # offline: re-runs itself in a network namespace witho
   `tr -c ' -~' '\n'` first. In image and `--rootfs` mode nothing from the
   scanned filesystem may be executed.
 - Lint: `shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fake-*/*`.
+- End-to-end: `tests/e2e-kind.sh` runs against a real kind cluster (CI job
+  `e2e (kind)`). Needs docker, kind, kubectl, crane and a static busybox.
+  Without kind (e.g. no access to kind's node image), `E2E_PHASES=images`
+  still checks the test images, a local registry and real `docker`/`crane`
+  image scans.
 
 ## README images
 

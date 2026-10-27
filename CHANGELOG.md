@@ -7,6 +7,11 @@
   no decoder error table, so `envoy --version` (default cluster mode) decides;
   without `exec` Envoy is now reported as `REVIEW` with an Envoy-specific
   explanation. README: corrected the Envoy and Istio rows accordingly.
+- End-to-end test on a real Kubernetes cluster (kind) in CI: real registry,
+  real `kubectl exec` (BusyBox in the pods, real `node -v`), `--no-exec` with
+  real `crane` pulls by digest, `--image` with real `docker`.
+- Exec failures now report the real reason (e.g. no `sh` in the image), also
+  when the runtime prints it on standard output.
 - Upkeep: Dependabot for the pinned GitHub Actions, a weekly test run without
   the download cache, OpenSSF Scorecard (workflow and badge).
 

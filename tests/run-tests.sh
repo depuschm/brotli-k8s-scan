@@ -141,6 +141,7 @@ for sh in $SHELLS; do
   expect_eq "api image vulnerable"                 "$(row "$REP" registry.test/api:1.4)" VULNERABLE
   expect_eq "web image patched"                    "$(row "$REP" registry.test/web:2)" PATCHED
   expect_eq "distroless needs review"              "$(row "$REP" registry.test/distroless:1)" REVIEW
+  expect_has "distroless: the exec error is reported" "$REP/report.tsv" "executable file not found"
   expect_eq "1.0.9 proxy vulnerable"               "$(row "$REP" registry.test/proxy:1.0)" VULNERABLE
   expect_eq "1.0.10 proxy patched"                 "$(row "$REP" registry.test/proxy:1.1)" PATCHED
   expect_eq "static job not found without --deep"  "$(row "$REP" registry.test/job:3)" NO_BROTLI_FOUND

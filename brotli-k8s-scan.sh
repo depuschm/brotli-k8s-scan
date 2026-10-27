@@ -446,7 +446,14 @@ while IFS="$TAB" read -r key image ns pod ctr method ref; do
   case "$method" in
     exec)
       ${TIMEOUT[@]+"${TIMEOUT[@]}"} "${K[@]}" exec -n "$ns" "$pod" -c "$ctr" -- sh -c "$PROBE" probe "" 1 "$DEEP" < /dev/null >> "$raw" 2> "$err"
-      grep -q '^BEGIN' "$raw" || printf 'EXECFAIL\t%s\n' "$(head -n 1 "$err" | tr '\t' ' ')" >> "$raw" ;;
+      xrc=$?
+      if ! grep -q '^BEGIN' "$raw"; then
+        # the reason may be on stderr (kubectl) or on stdout (runtime message)
+        msg=$(grep -v '^[[:space:]]*$' "$err" | head -n 1)
+        [ -n "$msg" ] || msg=$(sed -n '3,$p' "$raw" | grep -v '^[[:space:]]*$' | head -n 1)
+        [ -n "$msg" ] || msg="kubectl exec failed with exit code $xrc"
+        printf 'EXECFAIL\t%s\n' "$(printf '%s' "$msg" | tr -d '\r' | tr '\t' ' ')" >> "$raw"
+      fi ;;
     image)
       [ -n "$WORK" ] || WORK=$(mktemp -d "${TMPDIR:-/tmp}/brotli-scan.XXXXXX")
       d="$WORK/rootfs"

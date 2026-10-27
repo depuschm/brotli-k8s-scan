@@ -226,6 +226,11 @@ tests/build-fixtures.sh   # once; downloads sources and binaries (needs network;
 tests/run-tests.sh        # offline: re-runs itself under `unshare -rn` without network
 ```
 
+An end-to-end test (`tests/e2e-kind.sh`, CI job `e2e (kind)`) runs the scanner
+against a **real Kubernetes cluster** (kind) with a real registry, real
+`kubectl exec`, `crane` and `docker`. Its test images are built from the same
+real binaries plus a static BusyBox shell, and one image has no shell at all.
+
 The suite repeats every probe test with `sh`, `dash` and, if installed,
 BusyBox (with only BusyBox tools in `PATH`, like an Alpine image). It also
 validates `report.sarif` against the SARIF 2.1.0 schema and checks the YARA
