@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stand-in for `crane export` used only for the "same version, different
+# verdict" screenshot: two image tags -> Ubuntu's libbrotli1 before and after
+# the backport (real packages, from tests/.cache/fixtures).
+set -u
+[ "${1:-}" = export ] || { echo "demo-crane: only 'export' is supported" >&2; exit 2; }
+case "${2:-}" in
+  *2026-10-20*) fx=ubuntu-old ;;
+  *2026-10-27*) fx=ubuntu-fixed ;;
+  *) echo "MANIFEST_UNKNOWN: ${2:-}" >&2; exit 1 ;;
+esac
+tar -C "$BROTLI_TEST_FIXTURES/$fx" -cf - .

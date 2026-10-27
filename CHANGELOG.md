@@ -14,6 +14,11 @@
 - GitHub Actions: tests on x86-64 and arm64 for every change; releases get
   `SHA256SUMS` and a signed build provenance attestation.
 - `SECURITY.md`, namespace-scoped RBAC example.
+- Terminal output: colour-coded finding states, summary columns stay aligned
+  with colours on, and the `--deep` tip only appears when something was
+  `NO_BROTLI_FOUND`.
+- README: banner, fingerprint diagram and screenshots of real scanner output,
+  reproducible with `docs/images/src/build-images.sh`; `CONTRIBUTING.md`.
 
 ## 0.2.0 (2026-10-27)
 

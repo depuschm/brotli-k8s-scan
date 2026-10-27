@@ -535,19 +535,24 @@ fi
 if [ "$total" = 1 ]; then
   ev="$OUT/raw/1.eval"; verdict=$(awk -F'\t' '$1=="V"{print $2}' "$ev")
   echo "Target: $(head -n 1 "$OUT/targets.tsv" | cut -f2)"
-  echo "Verdict: $verdict"
-  awk -F'\t' '$1=="F" { w = $4; if ($6 != "" && index(w, $6) == 0) w = w " (" $6 ")"; printf "  [%-6s] %-7s %s%s\n", $2, $3, w, ($5 ? "  -> " $5 : "") }' "$ev"
+  echo "Verdict: $(paint "$verdict")"
+  awk -F'\t' -v R="$C_RED" -v G="$C_GRN" -v Y="$C_YEL" -v D="$C_DIM" -v O="$C_OFF" '$1=="F" {
+    c = ($2 == "VULN") ? R : ($2 == "OK") ? G : ($2 == "REVIEW") ? Y : D
+    w = $4; if ($6 != "" && index(w, $6) == 0) w = w " (" $6 ")"
+    printf "  [%s%-6s%s] %-7s %s%s\n", c, $2, O, $3, w, ($5 ? "  -> " $5 : "") }' "$ev"
 else
   echo
   echo "=== Summary ($total unique images) ==="
   for v in VULNERABLE REVIEW PATCHED NO_BROTLI_FOUND; do
-    printf '%-16s %s\n' "$(paint "$v")" "$(awk -F'\t' -v v="$v" 'NR>1 && $1==v' "$OUT/report.tsv" | wc -l | tr -d ' ')"
+    # pad before colouring: colour codes would otherwise count as width
+    printf '%s%*s %s\n' "$(paint "$v")" $((16 - ${#v})) "" "$(awk -F'\t' -v v="$v" 'NR>1 && $1==v' "$OUT/report.tsv" | wc -l | tr -d ' ')"
   done
   echo
   awk -F'\t' 'NR>1 && ($1=="VULNERABLE" || $1=="REVIEW") { print $1 "\t" $2 "\t" $7 "\t" $8 }' "$OUT/report.tsv" |
   while IFS="$TAB" read -r v img users f; do
     printf '%s %s\n' "$(paint "$v")" "$img"
     [ "$users" != "-" ] && printf '           used by: %s\n' "$users"
+    f=${f//VULN:/${C_RED}VULN${C_OFF}:}; f=${f//REVIEW:/${C_YEL}REVIEW${C_OFF}:}
     printf '           %s\n' "$f"
   done
 fi
@@ -557,7 +562,9 @@ echo "Details:  $OUT/findings.tsv"
 [ -f "$OUT/report.json" ] && echo "JSON:     $OUT/report.json"
 [ -f "$OUT/report.sarif" ] && echo "SARIF:    $OUT/report.sarif"
 [ "$HAVE_JQ" = 0 ] && echo "(install jq to also get report.json)"
-[ "$DEEP" = 1 ] || echo "Tip: NO_BROTLI_FOUND only covers the usual suspects. Re-run with --deep to also fingerprint statically linked binaries."
+if [ "$DEEP" = 0 ] && awk -F'\t' 'NR>1 && $1=="NO_BROTLI_FOUND"{f=1} END{exit !f}' "$OUT/report.tsv"; then
+  echo "Tip: NO_BROTLI_FOUND only covers the usual suspects. Re-run with --deep to also fingerprint statically linked binaries."
+fi
 
 if awk -F'\t' 'NR>1 && $1=="VULNERABLE"{f=1} END{exit !f}' "$OUT/report.tsv"; then exit 1; fi
 if awk -F'\t' 'NR>1 && $1=="REVIEW"{f=1} END{exit !f}' "$OUT/report.tsv"; then exit 3; fi
