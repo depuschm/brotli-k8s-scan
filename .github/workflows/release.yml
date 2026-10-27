@@ -41,14 +41,29 @@ jobs:
           (cd dist && sha256sum brotli-k8s-scan.sh brotli_cve_2026_111497.yar > SHA256SUMS && cat SHA256SUMS)
 
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/brotli-k8s-scan.sh
             dist/brotli_cve_2026_111497.yar
 
+      # The attestation is also stored by GitHub; attaching it to the release
+      # lets people verify offline and lets tools (e.g. OpenSSF Scorecard)
+      # see that releases are signed. Both files hold the same signed SLSA
+      # provenance: the full Sigstore bundle and its DSSE envelope as in-toto.
+      - name: Attach the signed provenance to the release files
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" dist/brotli-k8s-scan.sigstore.json
+          jq -c '.dsseEnvelope' "$BUNDLE" > dist/brotli-k8s-scan.intoto.jsonl
+          [ "$(jq -r .payloadType dist/brotli-k8s-scan.intoto.jsonl)" = "application/vnd.in-toto+json" ]
+
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/brotli-k8s-scan.sh dist/brotli_cve_2026_111497.yar dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          gh release upload "$TAG" dist/brotli-k8s-scan.sh dist/brotli_cve_2026_111497.yar dist/SHA256SUMS \
+            dist/brotli-k8s-scan.sigstore.json dist/brotli-k8s-scan.intoto.jsonl --clobber --repo "$GITHUB_REPOSITORY"

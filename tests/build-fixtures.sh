@@ -153,7 +153,8 @@ done
 if [ "$rt_ok" = 1 ]; then chmod +x runtimes/*; RT_OK=1; else optional_failed "Envoy/Bun release downloads failed"; fi
 
 echo "== test helpers: yara-python, jsonschema, SARIF 2.1.0 schema"
-[ -f pylib/.ok ] || { python3 -m pip install -q --target pylib yara-python jsonschema && touch pylib/.ok; } ||
+# exact versions, every file checked against its hash (tests/requirements.txt)
+[ -f pylib/.ok ] || { python3 -m pip install -q --require-hashes --target pylib -r "$HERE/requirements.txt" && touch pylib/.ok; } ||
   optional_failed "pip install of yara-python/jsonschema failed"
 [ -f sarif-schema-2.1.0.json ] || curl -fsSL -o sarif-schema-2.1.0.json \
   https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json ||

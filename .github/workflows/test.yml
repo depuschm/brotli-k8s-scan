@@ -72,7 +72,7 @@ jobs:
             tests/.cache/runtimes
             tests/.cache/pylib
             tests/.cache/sarif-schema-2.1.0.json
-          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh') }}
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh', 'tests/requirements.txt') }}
 
       - name: Build fixtures (downloads; network on)
         env:
@@ -118,7 +118,7 @@ jobs:
             tests/.cache/runtimes
             tests/.cache/pylib
             tests/.cache/sarif-schema-2.1.0.json
-          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh') }}
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh', 'tests/requirements.txt') }}
 
       - name: Build fixtures (downloads; network on)
         env:

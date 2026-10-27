@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Releases attach the signed SLSA provenance as files
+  (`brotli-k8s-scan.sigstore.json`, `brotli-k8s-scan.intoto.jsonl`) for
+  offline verification.
+- CodeQL static analysis of workflows, Python and JavaScript on every change.
+- Test helpers (yara-python, jsonschema) are installed with exact versions and
+  verified hashes (`tests/requirements.txt`).
+
 - Tested against the official Bun 1.4.3 / 1.4.4 and Envoy 1.36.11 / 1.36.12
   release binaries. Bun: the fingerprint decides on its own. Envoy builds keep
   no decoder error table, so `envoy --version` (default cluster mode) decides;

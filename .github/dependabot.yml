@@ -11,3 +11,13 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: ci
+  # hash-pinned test helpers (tests/requirements.txt); hashes are regenerated
+  - package-ecosystem: pip
+    directory: /tests
+    schedule:
+      interval: monthly
+    groups:
+      test-helpers:
+        patterns: ["*"]
+    commit-message:
+      prefix: test
