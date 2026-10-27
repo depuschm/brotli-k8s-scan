@@ -77,6 +77,11 @@ vendor advisory in the commit message:
   failed run and an email, not during a release.
 - **OpenSSF Scorecard** rates the repository's security practices; results in
   the Security tab and on the README badge.
+- **CodeQL** analyses the workflows, Python and JavaScript on every change
+  (the bash scanner is covered by ShellCheck).
+- Test helpers are installed from `tests/requirements.txt` with
+  `--require-hashes`; Dependabot updates it monthly (versions and hashes), or
+  regenerate it by hand with the command in its header.
 
 ## Releasing
 

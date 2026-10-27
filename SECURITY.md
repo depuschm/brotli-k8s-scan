@@ -42,3 +42,9 @@ attestation created by GitHub Actions from this repository:
 sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan
 ```
+
+Releases after v0.3.0 also carry the signed provenance as files:
+`brotli-k8s-scan.sigstore.json` (Sigstore bundle, e.g. for
+`gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan --bundle brotli-k8s-scan.sigstore.json`)
+and `brotli-k8s-scan.intoto.jsonl` (the same signed SLSA provenance as an
+in-toto envelope).

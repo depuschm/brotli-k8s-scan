@@ -163,7 +163,7 @@ A scanner that runs inside your production pods should be easy to check:
 
 | What | How |
 |---|---|
-| The file is the one this repository built | `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan` (signed build provenance from GitHub Actions) |
+| The file is the one this repository built | `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan` (signed build provenance from GitHub Actions; releases after v0.3.0 also attach it as `.sigstore.json` / `.intoto.jsonl`) |
 | Exactly what runs inside your containers | `./brotli-k8s-scan.sh --print-probe` (about 100 lines of POSIX sh; a test checks it is byte-identical to what is executed) |
 | Which pods / images it would touch | `./brotli-k8s-scan.sh --dry-run` (with `--no-exec`: which images it would pull) |
 | It needs no network | `unshare -rn ./brotli-k8s-scan.sh --rootfs /` works without any network access |
