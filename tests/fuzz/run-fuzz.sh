@@ -30,8 +30,19 @@ rc=0
 for t in evaluator probe; do
   echo "== fuzz $t for ${SECS}s (probe shells: $SHELLS)"
   mkdir -p "$OUT/corpus-$t"
-  (cd "$OUT" && BROTLI_FUZZ_SHELLS="$SHELLS" TMPDIR="$OUT" python3 -I "$HERE/fuzz_scanner.py" "$PYLIB" "$t" \
-     -max_total_time="$SECS" -len_control=0 -max_len=2048 -print_final_stats=1 "corpus-$t") || rc=1
+  log="$OUT/fuzz-$t.log"
+  if (cd "$OUT" && BROTLI_FUZZ_SHELLS="$SHELLS" TMPDIR="$OUT" python3 -I "$HERE/fuzz_scanner.py" "$PYLIB" "$t" \
+        -max_total_time="$SECS" -len_control=0 -max_len=2048 -print_final_stats=1 "corpus-$t") > "$log" 2>&1; then
+    msg="$(sed -n 's/^Done \([0-9]*\) runs in \([0-9]*\) second.*/\1 inputs in \2 s, no failure/p' "$log")"
+    kind=notice
+  else
+    msg="$(grep -m 1 -E 'Error' "$log" | cut -c 1-300); input $(grep -m 1 '^Base64:' "$log")"
+    kind=error; rc=1
+  fi
+  grep -v -E '^#[0-9]+[[:space:]]+(NEW|REDUCE|pulse)' "$log"     # the summary, without per-input lines
+  echo "fuzz $t: $msg"
+  # readable through the check-runs API, like the e2e job's results
+  [ "${GITHUB_ACTIONS:-}" = true ] && echo "::$kind title=fuzz $t::$msg"
   rm -rf "$OUT"/brotli-fuzz.*
 done
 exit $rc
