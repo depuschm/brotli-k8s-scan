@@ -50,7 +50,7 @@
 # https://github.com/depuschm/brotli-k8s-scan  (MIT)
 
 set -u
-VERSION="0.3.0"
+VERSION="0.4.0"
 REPO_URL="https://github.com/depuschm/brotli-k8s-scan"
 
 NS=""; CTX=""; DEEP=0; OUT=""; TMO=180; ROOTFS=""; NOEXEC=0; SARIF=0; PLATFORM=""; EVAL_ONLY=0
