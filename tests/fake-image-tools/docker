@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Fake docker/podman for offline tests: create / export / rm.
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=_map.sh
+. "$HERE/_map.sh"
+echo "docker $*" >> "${BROTLI_TEST_LOG:-/dev/null}"
+case "${1:-}" in
+  create)
+    shift; [ "${1:-}" = --platform ] && shift 2
+    fx=$(fixture_for "$1") || { echo "Unable to find image '$1' locally" >&2; exit 125; }
+    echo "cid-$fx" ;;
+  export) tar -C "$BROTLI_TEST_FIXTURES/${2#cid-}" -cf - . ;;
+  rm) exit 0 ;;
+  *) echo "fake docker: unsupported: $*" >&2; exit 2 ;;
+esac

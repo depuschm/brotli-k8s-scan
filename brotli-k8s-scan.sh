@@ -1,48 +1,58 @@
 #!/usr/bin/env bash
-# brotli-k8s-scan.sh - find containers affected by CVE-2026-111497
-# ("Broccoli2Shell" / "Node2Shell" / "HTTP2Shell"), an out-of-bounds write in
-# the Google Brotli decoder 1.0.3-1.2.0 (fixed in 1.0.10, 1.1.1, 1.2.1).
+# brotli-k8s-scan.sh - find vulnerable Brotli decoders (CVE-2026-111497,
+# "Broccoli2Shell" / "Node2Shell" / "HTTP2Shell") in Kubernetes clusters,
+# container images and Linux filesystems. Brotli 1.0.3-1.2.0 is affected,
+# fixed in 1.0.10, 1.1.1 and 1.2.1.
 #
-# READ-ONLY: it lists pods, then runs a small inspection script (POSIX sh) in
-# ONE running container per unique image via `kubectl exec`. The script only
-# reads files and prints versions. Nothing is installed, changed or restarted.
+# Version numbers are not enough: patched builds often keep the old version
+# string (Node.js 22.23.4 still reports Brotli 1.1.0; Ubuntu's fixed package
+# is still "1.1.0"). So besides version checks this tool fingerprints the
+# binaries themselves: the fix added the decoder error code
+# "_ERROR_FORMAT_BLOCK_SWITCH" (1.0.x: "BLOCK_SWITCH"). A file that contains
+# the Brotli decoder error table WITHOUT that code is vulnerable. This also
+# finds bundled copies (Node, Bun, Python wheels, Pillow, .NET, nginx, ...).
 #
-# How it decides (two independent signals):
-#  1. Version numbers: Node.js (22.23.4 / 24.22.1 / 26.12.1), Bun (1.4.4),
-#     Python Brotli (1.2.1) and brotlicffi (1.2.1.0) dist-info folders.
-#  2. Binary fingerprint, which also catches BUNDLED copies (Node, .NET's
-#     libSystem.IO.Compression.Native.so, nginx modules, Python wheels, ...):
-#     the fix added the decoder error code "_ERROR_FORMAT_BLOCK_SWITCH"
-#     (1.0.x: "BLOCK_SWITCH"). A file that contains the Brotli dictionary and
-#     the decoder error table but NOT that code is vulnerable. Stripped static
-#     binaries may lack the error table -> reported as REVIEW (unknown version).
+# READ-ONLY. Nothing is installed, changed or restarted.
 #
-# Requirements (your machine): bash, kubectl, jq, awk.
-# RBAC: get/list pods, create pods/exec.
-#
-# Usage:
-#   ./brotli-k8s-scan.sh                      # all namespaces, current context
-#   ./brotli-k8s-scan.sh -n my-namespace      # one namespace
-#   ./brotli-k8s-scan.sh --context prod --deep
-#   ./brotli-k8s-scan.sh --rootfs ./extracted-image   # offline: scan an
-#        unpacked image filesystem (for distroless images without a shell)
+# Modes:
+#   ./brotli-k8s-scan.sh                     cluster: kubectl exec a small sh probe
+#                                            into ONE running container per image
+#   ./brotli-k8s-scan.sh --no-exec           cluster, without exec: list pods, then pull
+#                                            each image by digest and scan it locally
+#   ./brotli-k8s-scan.sh --image REF [...]   scan container images (no cluster needed)
+#   ./brotli-k8s-scan.sh --rootfs DIR        scan an unpacked filesystem; --rootfs / scans
+#                                            this machine
 #
 # Options:
-#   -n, --namespace NS   only this namespace (default: all namespaces)
-#   --context CTX        kubectl context
-#   --deep               fingerprint every executable / .so > 100 KB, not just
-#                        the usual suspects (slower, finds statically linked copies)
-#   -o, --out DIR        output directory (default: ./brotli-scan-<timestamp>)
-#   --timeout SEC        per-container exec timeout (default 180, needs `timeout`)
-#   --rootfs DIR         scan an extracted container filesystem locally instead
-#   -h, --help
+#   -n, --namespace NS    cluster modes: only this namespace (default: all)
+#   --context CTX         kubectl context
+#   --image REF           image to scan; repeat for several
+#   --images-from FILE    file with one image reference per line
+#   --platform P          image platform, e.g. linux/arm64 (image modes)
+#   --deep                fingerprint every executable / .so > 100 KB, not just the
+#                         usual suspects (finds statically linked copies; slower)
+#   --sarif               also write report.sarif (GitHub code scanning etc.)
+#   -o, --out DIR         output directory (default: ./brotli-scan-<timestamp>)
+#   --timeout SEC         per-container exec timeout (default 180, needs `timeout`)
+#   --version, -h/--help
 #
-# Exit code: 0 = nothing vulnerable found, 1 = vulnerable found, 2 = usage/error,
-#            3 = nothing vulnerable but some items need manual review.
+# Requirements: bash, awk, tar. Cluster modes: kubectl, jq. Image modes: crane,
+# docker or podman (set BROTLI_IMAGE_TOOL to choose). jq for report.json/.sarif.
+# RBAC: get/list pods; plus create pods/exec for the default cluster mode.
+#
+# Output: report.tsv (one row per image), findings.tsv, report.json,
+#         report.sarif (--sarif), raw/ (probe output).
+# Exit code: 0 nothing vulnerable, 1 vulnerable found, 3 nothing vulnerable but
+#            some items need manual review, 2 usage/error.
+#
+# https://github.com/depuschm/brotli-k8s-scan  (MIT)
 
 set -u
+VERSION="0.2.0"
+REPO_URL="https://github.com/depuschm/brotli-k8s-scan"
 
-NS=""; CTX=""; DEEP=0; OUT=""; TMO=180; ROOTFS=""
+NS=""; CTX=""; DEEP=0; OUT=""; TMO=180; ROOTFS=""; NOEXEC=0; SARIF=0; PLATFORM=""; EVAL_ONLY=0
+IMAGES=(); IMAGES_FROM=""
 
 die() { echo "error: $*" >&2; exit 2; }
 usage() { sed -n '2,/^set -u/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^set -u/d'; exit "${1:-0}"; }
@@ -55,18 +65,56 @@ while [ $# -gt 0 ]; do
     -o|--out) OUT="${2:-}"; shift 2 ;;
     --timeout) TMO="${2:-}"; shift 2 ;;
     --rootfs) ROOTFS="${2:-}"; shift 2 ;;
+    --no-exec) NOEXEC=1; shift ;;
+    --image) [ -n "${2:-}" ] || die "--image needs a reference"; IMAGES+=("$2"); shift 2 ;;
+    --images-from) IMAGES_FROM="${2:-}"; shift 2 ;;
+    --platform) PLATFORM="${2:-}"; shift 2 ;;
+    --sarif) SARIF=1; shift ;;
+    --version) echo "brotli-k8s-scan $VERSION"; exit 0 ;;
+    --evaluate-stdin) EVAL_ONLY=1; shift ;;   # internal: evaluate probe output from stdin (tests)
     -h|--help) usage 0 ;;
     *) echo "unknown option: $1" >&2; usage 2 ;;
   esac
 done
 
-[ -n "$OUT" ] || OUT="./brotli-scan-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$OUT/raw" || die "cannot create $OUT"
+if [ -n "$IMAGES_FROM" ]; then
+  [ -r "$IMAGES_FROM" ] || die "cannot read $IMAGES_FROM"
+  while IFS= read -r l || [ -n "$l" ]; do
+    l=${l%%#*}; l=$(printf '%s' "$l" | tr -d ' \t\r')
+    [ -n "$l" ] && IMAGES+=("$l")
+  done < "$IMAGES_FROM"
+fi
+
+if [ -n "$ROOTFS" ]; then MODE=rootfs
+elif [ "${#IMAGES[@]}" -gt 0 ]; then MODE=image
+else MODE=cluster; fi
+
+if [ "$EVAL_ONLY" = 0 ]; then
+  [ -n "$OUT" ] || OUT="./brotli-scan-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$OUT/raw" || die "cannot create $OUT"
+fi
+
+HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+[ "$SARIF" = 1 ] && [ "$HAVE_JQ" = 0 ] && die "--sarif needs jq"
+
+# colours only for a terminal, and never with NO_COLOR set
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_RED=$(printf '\033[1;31m'); C_YEL=$(printf '\033[1;33m'); C_GRN=$(printf '\033[1;32m'); C_DIM=$(printf '\033[2m'); C_OFF=$(printf '\033[0m')
+else C_RED=""; C_YEL=""; C_GRN=""; C_DIM=""; C_OFF=""; fi
+paint() {  # verdict or state -> coloured text
+  case "$1" in
+    VULNERABLE|VULN) printf '%s%s%s' "$C_RED" "$1" "$C_OFF" ;;
+    REVIEW)          printf '%s%s%s' "$C_YEL" "$1" "$C_OFF" ;;
+    PATCHED|OK)      printf '%s%s%s' "$C_GRN" "$1" "$C_OFF" ;;
+    *)               printf '%s%s%s' "$C_DIM" "$1" "$C_OFF" ;;
+  esac
+}
 
 # ---------------------------------------------------------------------------
-# Probe: runs INSIDE the container (or locally against --rootfs). POSIX sh,
-# works with dash/ash/busybox. Args: $1=root prefix ("" in a container),
-# $2=1 to run binaries for version info (0 in rootfs mode), $3=deep (0/1).
+# Probe: runs INSIDE the container (cluster mode) or locally against an
+# unpacked filesystem (image / rootfs modes). POSIX sh; works with dash and
+# BusyBox ash. Args: $1=root prefix ("" in a container), $2=1 to run binaries
+# for version info (0 for unpacked filesystems), $3=deep (0/1).
 # Output: tab-separated records.
 # ---------------------------------------------------------------------------
 read -r -d '' PROBE <<'PROBE_EOF'
@@ -83,6 +131,7 @@ if [ "$X" = 1 ]; then
     p=$(command -v "$c" 2>/dev/null) && [ -n "$p" ] && { r=$(readlink -f "$p" 2>/dev/null || echo "$p"); echo "NODE${T}$("$p" -v 2>/dev/null | head -n 1)${T}${r#$R}"; }
   done
   p=$(command -v bun 2>/dev/null) && [ -n "$p" ] && { r=$(readlink -f "$p" 2>/dev/null || echo "$p"); echo "BUN${T}$("$p" --version 2>/dev/null | head -n 1)${T}${r#$R}"; }
+  p=$(command -v envoy 2>/dev/null) && [ -n "$p" ] && { r=$(readlink -f "$p" 2>/dev/null || echo "$p"); echo "ENVOY${T}$("$p" --version 2>/dev/null | sed -n 's|.*/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[/-].*|\1|p' | head -n 1)${T}${r#$R}"; }
   p=$(command -v dotnet 2>/dev/null) && [ -n "$p" ] && "$p" --list-runtimes 2>/dev/null | while IFS= read -r l; do echo "DOTNET${T}$l"; done
   p=$(command -v curl 2>/dev/null) && [ -n "$p" ] && echo "CURL${T}$("$p" -V 2>/dev/null | head -n 1)"
   command -v rpm >/dev/null 2>&1 && rpm -qa 2>/dev/null | grep -i brotli | while IFS= read -r l; do echo "OSPKG${T}rpm${T}$l"; done
@@ -96,7 +145,7 @@ if [ -r "$R/lib/apk/db/installed" ]; then
   awk -v T="$T" '/^P:/{p=substr($0,3)} /^V:/{v=substr($0,3)} /^$/{if(p ~ /brotli/) print "OSPKG" T "apk" T p " " v; p=""; v=""} END{if(p ~ /brotli/) print "OSPKG" T "apk" T p " " v}' "$R/lib/apk/db/installed"
 fi
 
-# --- Python packages (any venv / site-packages on the image filesystem) ---
+# --- Python packages (any venv / site-packages on the filesystem) ---
 find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type d \
   \( -iname 'brotli-*.dist-info' -o -iname 'brotli-*.egg-info' -o -iname 'brotlicffi-*.dist-info' \
      -o -iname 'brotlicffi-*.egg-info' -o -iname 'brotlipy-*.dist-info' -o -iname 'brotlipy-*.egg-info' \) -print 2>/dev/null |
@@ -152,8 +201,8 @@ echo "END"
 PROBE_EOF
 
 # ---------------------------------------------------------------------------
-# Evaluator: turns probe output into findings + one verdict.
-# Prints lines:  F<TAB>state<TAB>kind<TAB>what<TAB>note   and  V<TAB>verdict
+# Evaluator: probe output -> findings + one verdict. Prints
+#   O<TAB>os   F<TAB>state<TAB>kind<TAB>what<TAB>note<TAB>path   V<TAB>verdict
 # states: VULN, REVIEW, OK, INFO
 # ---------------------------------------------------------------------------
 evaluate() {
@@ -164,160 +213,308 @@ evaluate() {
     for (i = 1; i <= (n > m ? n : m); i++) { x = ax[i] + 0; y = bx[i] + 0; if (x < y) return -1; if (x > y) return 1 }
     return 0
   }
-  function node_state(v,   p, maj) {
-    sub(/^v/, "", v); split(v, p, "."); maj = p[1] + 0
-    if (v == "") return "REVIEW"
-    if (maj == 22) return vcmp(v, "22.23.4") < 0 ? "VULN" : "OK"
-    if (maj == 24) return vcmp(v, "24.22.1") < 0 ? "VULN" : "OK"
-    if (maj == 26) return vcmp(v, "26.12.1") < 0 ? "VULN" : "OK"
-    if (maj >= 27) return "OK"
-    return "EOL"
+  function line(v, n,   p) { sub(/^v/, "", v); split(v, p, "."); return (n == 1) ? p[1] + 0 : (p[1] + 0) "." (p[2] + 0) }
+  # runtime version rules -> OK / VULN / EOL / ""(unknown)
+  function rt_state(kind, v,   maj, mm) {
+    if (v == "") return ""
+    if (kind == "node") {
+      maj = line(v, 1)
+      if (maj == 22) return vcmp(v, "22.23.4") < 0 ? "VULN" : "OK"
+      if (maj == 24) return vcmp(v, "24.22.1") < 0 ? "VULN" : "OK"
+      if (maj == 26) return vcmp(v, "26.12.1") < 0 ? "VULN" : "OK"
+      return maj >= 27 ? "OK" : "EOL"
+    }
+    if (kind == "bun") return vcmp(v, "1.4.4") < 0 ? "VULN" : "OK"
+    if (kind == "envoy") {
+      mm = line(v, 2)
+      if (mm == "1.39") return vcmp(v, "1.39.3") < 0 ? "VULN" : "OK"
+      if (mm == "1.38") return vcmp(v, "1.38.6") < 0 ? "VULN" : "OK"
+      if (mm == "1.37") return vcmp(v, "1.37.8") < 0 ? "VULN" : "OK"
+      if (mm == "1.36") return vcmp(v, "1.36.12") < 0 ? "VULN" : "OK"
+      return vcmp(v, "1.40.0") >= 0 ? "OK" : "EOL"
+    }
+    if (kind == "dotnet") {
+      maj = line(v, 1)
+      if (maj == 10) return vcmp(v, "10.0.14") < 0 ? "VULN" : "OK"
+      if (maj == 9)  return vcmp(v, "9.0.22") < 0 ? "VULN" : "OK"
+      if (maj == 8)  return vcmp(v, "8.0.33") < 0 ? "VULN" : "OK"
+      return maj >= 11 ? "OK" : "EOL"
+    }
+    return ""
   }
-  function add(state, kind, what, note) { nf++; FS_[nf] = state; FK[nf] = kind; FW[nf] = what; FN[nf] = note }
+  function fixhint(kind) {
+    if (kind == "node")   return "upgrade to Node.js 22.23.4 / 24.22.1 / 26.12.1"
+    if (kind == "bun")    return "upgrade to Bun 1.4.4"
+    if (kind == "envoy")  return "upgrade to Envoy 1.36.12 / 1.37.8 / 1.38.6 / 1.39.3 / 1.40.0 (Istio 1.29.9 / 1.30.6 / 1.31.2); exposed only if the Brotli decompressor is configured"
+    if (kind == "dotnet") return "upgrade to .NET 8.0.33 / 9.0.22 / 10.0.14; republish self-contained apps"
+    return ""
+  }
+  function add(state, kind, what, note, path) { nf++; FS_[nf] = state; FK[nf] = kind; FW[nf] = what; FN[nf] = note; FP[nf] = path }
   $1 == "BEGIN" { began = 1 }
   $1 == "END"   { ended = 1 }
-  $1 == "EXECFAIL" { add("REVIEW", "exec", $2, "could not run the probe (no shell / distroless?). Scan the image offline with --rootfs") }
+  $1 == "EXECFAIL" { add("REVIEW", "exec", $2, "could not run the probe (no shell / distroless?). Re-run with --no-exec, or scan the image with --image", "") }
+  $1 == "PULLFAIL" { add("REVIEW", "image", $2, "could not pull/unpack the image (registry login? platform?)", "") }
   $1 == "OS"    { os = $2 }
-  $1 == "NODE"  { nn++; NV[nn] = $2; NP[nn] = $3 }
-  $1 == "BUN"   { bn++; BV[bn] = $2; BP[bn] = $3 }
+  $1 == "NODE" || $1 == "BUN" || $1 == "ENVOY" { nr++; RK[nr] = tolower($1); RV[nr] = $2; RP[nr] = $3 }
   $1 == "BIN"   { bin[$3] = $2; binorder[++nb] = $3 }
   $1 == "PY" {
     n = tolower($2); v = $3
-    if (n == "brotli")          add(vcmp(v, "1.2.1") < 0 ? "VULN" : "OK", "python", "Brotli " v " (" $4 ")", vcmp(v, "1.2.1") < 0 ? "upgrade to Brotli>=1.2.1" : "")
-    else if (n == "brotlicffi") add(vcmp(v, "1.2.1.0") < 0 ? "VULN" : "OK", "python", "brotlicffi " v " (" $4 ")", vcmp(v, "1.2.1.0") < 0 ? "upgrade to brotlicffi>=1.2.1.0" : "")
-    else if (n == "brotlipy")   add("REVIEW", "python", "brotlipy " v " (" $4 ")", "unmaintained, bundles old Brotli; replace with brotlicffi>=1.2.1.0")
+    if (n == "brotli")          add(vcmp(v, "1.2.1") < 0 ? "VULN" : "OK", "python", "Brotli " v, vcmp(v, "1.2.1") < 0 ? "upgrade to Brotli>=1.2.1" : "", $4)
+    else if (n == "brotlicffi") add(vcmp(v, "1.2.1.0") < 0 ? "VULN" : "OK", "python", "brotlicffi " v, vcmp(v, "1.2.1.0") < 0 ? "upgrade to brotlicffi>=1.2.1.0" : "", $4)
+    else if (n == "brotlipy")   add("REVIEW", "python", "brotlipy " v, "unmaintained, bundles old Brotli; replace with brotlicffi>=1.2.1.0", $4)
   }
-  $1 == "JAR"    { add("REVIEW", "java", $2, "jar may bundle native Brotli (brotli4j); check vendor advisory") }
-  $1 == "OSPKG"  { add("INFO", "ospkg", $2 ": " $3, "distro may backport; the library file itself is fingerprinted below") }
-  $1 == "DOTNET" { add("INFO", "dotnet", $2, "runtime bundles Brotli in libSystem.IO.Compression.Native.so (fingerprinted)") }
-  $1 == "CURL"   { add("INFO", "curl", $2, "") }
+  $1 == "JAR"    { add("REVIEW", "java", $2, "jar may bundle native Brotli (brotli4j); check vendor advisory", $2) }
+  $1 == "OSPKG"  { add("INFO", "ospkg", $2 ": " $3, "distros backport fixes without changing the version; the library file itself is fingerprinted", "") }
+  $1 == "DOTNET" { add("INFO", "dotnet", $2, "runtime bundles Brotli in libSystem.IO.Compression.Native.so (checked below)", "") }
+  $1 == "CURL"   { add("INFO", "curl", $2, "", "") }
   END {
-    if (!began && nf == 0) add("REVIEW", "exec", "no probe output", "probe did not run")
-    else if (began && !ended) add("REVIEW", "exec", "probe output incomplete", "timeout or interrupted")
-    for (i = 1; i <= nn; i++) {
-      s = node_state(NV[i]); b = (NP[i] in bin) ? bin[NP[i]] : ""
-      if (b == "PATCHED" && s != "OK")       add("OK", "node", "node " NV[i] " (" NP[i] ")", "version predates fix but binary contains the fix (vendor backport)")
-      else if (b ~ /^VULNERABLE/)            add("VULN", "node", "node " NV[i] " (" NP[i] ")", "upgrade to 22.23.4 / 24.22.1 / 26.12.1")
-      else if (s == "VULN")                  add(b == "" ? "REVIEW" : "VULN", "node", "node " NV[i] " (" NP[i] ")", b == "" ? "old version, but binary has no embedded Brotli (uses system lib, see below)" : "upgrade to 22.23.4 / 24.22.1 / 26.12.1")
-      else if (s == "EOL")                   add(b == "" ? "REVIEW" : "VULN", "node", "node " NV[i] " (" NP[i] ")", "end-of-life line, no fix will ship: move to 22/24/26")
-      else                                   add("OK", "node", "node " NV[i] " (" NP[i] ")", "")
-      if (NP[i] in bin) used[NP[i]] = 1
-    }
-    for (i = 1; i <= bn; i++) {
-      v = BV[i]; b = (BP[i] in bin) ? bin[BP[i]] : ""
-      if (b == "PATCHED" || (b !~ /^VULNERABLE/ && vcmp(v, "1.4.4") >= 0)) add("OK", "bun", "bun " v " (" BP[i] ")", "")
-      else add("VULN", "bun", "bun " v " (" BP[i] ")", "upgrade to Bun>=1.4.4")
-      if (BP[i] in bin) used[BP[i]] = 1
+    if (!began && nf == 0) add("REVIEW", "exec", "no probe output", "probe did not run", "")
+    else if (began && !ended) add("REVIEW", "exec", "probe output incomplete", "timeout or interrupted", "")
+    # runtimes found via PATH: combine version rule with the binary fingerprint
+    for (i = 1; i <= nr; i++) {
+      k = RK[i]; v = RV[i]; p = RP[i]; s = rt_state(k, v); b = (p in bin) ? bin[p] : ""
+      w = k " " v
+      if (b == "PATCHED" || b == "PATCHED_10X") add("OK", k, w, (s == "VULN" || s == "EOL") ? "version predates fix but the binary contains it (vendor backport)" : "", p)
+      else if (b ~ /^VULNERABLE/)              add("VULN", k, w, s == "EOL" ? "end-of-life line, no fix will ship" : fixhint(k), p)
+      else if (s == "VULN" || s == "EOL")      add(b == "" ? "REVIEW" : "VULN", k, w, b == "" ? "old version, but no embedded Brotli found in the binary (may use the system library, see below)" : (s == "EOL" ? "end-of-life line, no fix will ship" : fixhint(k)), p)
+      else if (s == "OK")                      add("OK", k, w, "", p)
+      else                                     add("REVIEW", k, w, "version not readable", p)
+      if (p in bin) used[p] = 1
     }
     for (i = 1; i <= nb; i++) {
       p = binorder[i]; if (p in used) continue; s = bin[p]
-      if (s == "PATCHED")             add("OK", "binary", p, "contains Brotli fix")
-      else if (s == "PATCHED_10X")    add("OK", "binary", p, "Brotli 1.0.x with fix (heuristic)")
-      else if (s == "VULNERABLE")     add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.1.x/1.2.x without fix)")
-      else if (s == "VULNERABLE_10X") add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.0.x without fix; <1.0.3 is not affected but is ancient)")
-      else                            add("REVIEW", "binary", p, "contains Brotli decoder, version not detectable (stripped). Ask vendor / rebuild")
+      # .NET shared runtime: version from the path
+      dv = ""; if (match(p, /Microsoft\.NETCore\.App\/[0-9]+\.[0-9]+\.[0-9]+/)) { dv = substr(p, RSTART + 22, RLENGTH - 22) }
+      if (s == "PATCHED")             add("OK", "binary", p, "contains Brotli fix", p)
+      else if (s == "PATCHED_10X")    add("OK", "binary", p, "Brotli 1.0.x with fix", p)
+      else if (s == "VULNERABLE")     add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.1.x/1.2.x without fix)" (dv != "" ? "; " fixhint("dotnet") : ""), p)
+      else if (s == "VULNERABLE_10X") add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.0.x without fix)", p)
+      else if (dv != "" && rt_state("dotnet", dv) == "OK") add("OK", "dotnet", ".NET " dv, "runtime version contains the fix", p)
+      else if (dv != "")              add("VULN", "dotnet", ".NET " dv, fixhint("dotnet"), p)
+      else                            add("REVIEW", "binary", p, "contains Brotli decoder, version not detectable (stripped). Ask vendor / rebuild", p)
     }
     v = "NO_BROTLI_FOUND"
     for (i = 1; i <= nf; i++) if (FS_[i] == "OK" && v == "NO_BROTLI_FOUND") v = "PATCHED"
     for (i = 1; i <= nf; i++) if (FS_[i] == "REVIEW" && v != "VULNERABLE") v = "REVIEW"
     for (i = 1; i <= nf; i++) if (FS_[i] == "VULN") v = "VULNERABLE"
     if (os != "") print "O\t" os
-    for (i = 1; i <= nf; i++) print "F\t" FS_[i] "\t" FK[i] "\t" FW[i] "\t" FN[i]
+    for (i = 1; i <= nf; i++) print "F\t" FS_[i] "\t" FK[i] "\t" FW[i] "\t" FN[i] "\t" FP[i]
     print "V\t" v
   }'
 }
 
+[ "$EVAL_ONLY" = 1 ] && { evaluate; exit 0; }
+
 summarize_findings() {  # $1 = evaluated file -> one-line summary of VULN/REVIEW findings
-  awk -F'\t' '$1=="F" && ($2=="VULN" || $2=="REVIEW") { s = s (s ? "; " : "") $2 ": " $4 } END { print (s ? s : "-") }' "$1"
+  awk -F'\t' '$1=="F" && ($2=="VULN" || $2=="REVIEW") { w = $4; if ($6 != "" && index(w, $6) == 0) w = w " (" $6 ")"; s = s (s ? "; " : "") $2 ": " w } END { print (s ? s : "-") }' "$1"
+}
+
+run_probe_local() {  # $1=root dir -> probe output on stdout
+  ${BROTLI_PROBE_SHELL:-sh} -c "$PROBE" probe "$1" 0 "$DEEP" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
-# Mode 1: local rootfs
+# Image export (crane, docker or podman) into a temporary directory
 # ---------------------------------------------------------------------------
-if [ -n "$ROOTFS" ]; then
-  [ -d "$ROOTFS" ] || die "--rootfs: not a directory: $ROOTFS"
-  R=$(cd "$ROOTFS" && pwd -P)
-  ${BROTLI_PROBE_SHELL:-sh} -c "$PROBE" probe "$R" 0 "$DEEP" > "$OUT/raw/rootfs.txt" 2>/dev/null
-  evaluate < "$OUT/raw/rootfs.txt" > "$OUT/raw/rootfs.eval"
-  verdict=$(awk -F'\t' '$1=="V"{print $2}' "$OUT/raw/rootfs.eval")
-  echo "Rootfs: $R"
-  echo "Verdict: $verdict"
-  awk -F'\t' '$1=="F" { printf "  [%-6s] %-7s %s%s\n", $2, $3, $4, ($5 ? "  -> " $5 : "") }' "$OUT/raw/rootfs.eval"
-  case "$verdict" in VULNERABLE) exit 1 ;; REVIEW) exit 3 ;; *) exit 0 ;; esac
-fi
+IMG_TOOL=""
+pick_image_tool() {
+  if [ -n "${BROTLI_IMAGE_TOOL:-}" ]; then IMG_TOOL=$BROTLI_IMAGE_TOOL
+  else for t in crane docker podman; do command -v "$t" >/dev/null 2>&1 && { IMG_TOOL=$t; break; }; done; fi
+  [ -n "$IMG_TOOL" ] || die "image scanning needs crane, docker or podman (https://github.com/google/go-containerregistry/tree/main/cmd/crane)"
+  command -v "$IMG_TOOL" >/dev/null 2>&1 || die "$IMG_TOOL not found"
+}
+export_image() {  # $1=ref $2=dest dir $3=error file ; 0 if something was unpacked
+  local ref=$1 dest=$2 err=$3 cid rc
+  mkdir -p "$dest"
+  case "$IMG_TOOL" in
+    crane)
+      crane export ${PLATFORM:+--platform "$PLATFORM"} "$ref" - 2>"$err" | tar -x -f - -C "$dest" --no-same-owner 2>/dev/null
+      rc=${PIPESTATUS[0]} ;;
+    docker|podman)
+      cid=$("$IMG_TOOL" create ${PLATFORM:+--platform "$PLATFORM"} "$ref" /nonexistent 2>"$err") || return 1
+      "$IMG_TOOL" export "$cid" 2>>"$err" | tar -x -f - -C "$dest" --no-same-owner 2>/dev/null
+      rc=${PIPESTATUS[0]}
+      "$IMG_TOOL" rm -f "$cid" >/dev/null 2>&1 ;;
+    *) echo "unsupported image tool: $IMG_TOOL" > "$err"; return 1 ;;
+  esac
+  [ "$rc" = 0 ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]
+}
+WORK=""
+cleanup() { [ -n "$WORK" ] && [ -d "$WORK" ] && { chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK"; }; }
+trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
-# Mode 2: cluster
+# Build the target list:  key image ns pod container method ref
 # ---------------------------------------------------------------------------
-command -v kubectl >/dev/null 2>&1 || die "kubectl not found"
-command -v jq >/dev/null 2>&1 || die "jq not found"
+TAB=$(printf '\t')
+: > "$OUT/containers.tsv"
+case "$MODE" in
+  rootfs)
+    [ -d "$ROOTFS" ] || die "--rootfs: not a directory: $ROOTFS"
+    R=$(cd "$ROOTFS" && pwd -P)
+    printf 'rootfs:%s\t%s\t-\t-\t-\trootfs\t%s\n' "$R" "$R" "$R" > "$OUT/targets.tsv" ;;
+  image)
+    pick_image_tool
+    : > "$OUT/targets.tsv"
+    for ref in "${IMAGES[@]}"; do printf '%s\t%s\t-\t-\t-\timage\t%s\n' "$ref" "$ref" "$ref" >> "$OUT/targets.tsv"; done
+    awk -F'\t' '!seen[$1]++' "$OUT/targets.tsv" > "$OUT/targets.tmp" && mv "$OUT/targets.tmp" "$OUT/targets.tsv" ;;
+  cluster)
+    command -v kubectl >/dev/null 2>&1 || die "kubectl not found"
+    [ "$HAVE_JQ" = 1 ] || die "jq not found"
+    [ "$NOEXEC" = 1 ] && pick_image_tool
+    K=(kubectl); [ -n "$CTX" ] && K+=(--context "$CTX")
+    if [ -n "$NS" ]; then NSARG=(-n "$NS"); else NSARG=(--all-namespaces); fi
+    echo "Listing pods..." >&2
+    "${K[@]}" get pods "${NSARG[@]}" -o json > "$OUT/pods.json" || die "kubectl get pods failed"
+    # imageKey, image, namespace, pod, container, owner, pullRef
+    jq -r '
+      .items[] | select(.status.phase == "Running") | . as $p
+      | (.status.containerStatuses // [])[] | select(.state.running != null)
+      | ((.imageID // "") | sub("^docker-pullable://"; "")) as $id
+      | [ (if $id != "" then $id else .image end),
+          .image, $p.metadata.namespace, $p.metadata.name, .name,
+          (($p.metadata.ownerReferences // [])[0] | if . then (.kind + "/" + .name) else "-" end),
+          (if ($id | test("@sha256:")) then $id else .image end) ]
+      | @tsv' "$OUT/pods.json" > "$OUT/containers.tsv" || die "jq failed"
+    method="exec"; [ "$NOEXEC" = 1 ] && method="image"
+    awk -F'\t' -v m="$method" 'BEGIN { OFS = "\t" } !seen[$1]++ { print $1, $2, $3, $4, $5, m, $7 }' "$OUT/containers.tsv" > "$OUT/targets.tsv"
+    echo "Running containers: $(wc -l < "$OUT/containers.tsv" | tr -d ' '), unique images: $(wc -l < "$OUT/targets.tsv" | tr -d ' ')" >&2 ;;
+esac
 
-K=(kubectl)
-[ -n "$CTX" ] && K+=(--context "$CTX")
-if [ -n "$NS" ]; then NSARG=(-n "$NS"); else NSARG=(--all-namespaces); fi
-
-TIMEOUT=()
-command -v timeout >/dev/null 2>&1 && TIMEOUT=(timeout "$TMO")
-
-echo "Listing pods..." >&2
-"${K[@]}" get pods "${NSARG[@]}" -o json > "$OUT/pods.json" || die "kubectl get pods failed"
-
-# imageKey, image, namespace, pod, container, owner
-jq -r '
-  .items[] | select(.status.phase == "Running") | . as $p
-  | (.status.containerStatuses // [])[] | select(.state.running != null)
-  | [ (if (.imageID // "") != "" then .imageID else .image end),
-      .image, $p.metadata.namespace, $p.metadata.name, .name,
-      (($p.metadata.ownerReferences // [])[0] | if . then (.kind + "/" + .name) else "-" end) ]
-  | @tsv' "$OUT/pods.json" > "$OUT/containers.tsv" || die "jq failed"
-
-awk -F'\t' '!seen[$1]++' "$OUT/containers.tsv" > "$OUT/targets.tsv"
 total=$(wc -l < "$OUT/targets.tsv" | tr -d ' ')
-echo "Running containers: $(wc -l < "$OUT/containers.tsv" | tr -d ' '), unique images: $total" >&2
-[ "$total" -gt 0 ] || { echo "No running containers found." >&2; exit 0; }
+[ "$total" -gt 0 ] || { echo "Nothing to scan (no running containers found)." >&2; exit 0; }
 
-printf 'verdict\timage\timage_id\tsampled_namespace\tsampled_pod\tcontainer\tworkloads_using_image\tfindings\n' > "$OUT/report.tsv"
+TIMEOUT=(); command -v timeout >/dev/null 2>&1 && TIMEOUT=(timeout "$TMO")
 
+# ---------------------------------------------------------------------------
+# Scan every target
+# ---------------------------------------------------------------------------
+printf 'verdict\timage\timage_id\tsampled_namespace\tsampled_pod\tcontainer\tworkloads_using_image\tfindings\tmethod\n' > "$OUT/report.tsv"
 i=0
-while IFS="$(printf '\t')" read -r key image ns pod ctr _owner; do
+while IFS="$TAB" read -r key image ns pod ctr method ref; do
   i=$((i + 1))
   raw="$OUT/raw/$i.txt"; ev="$OUT/raw/$i.eval"; err="$OUT/raw/$i.err"
-  printf '[%d/%d] %s  (%s/%s -c %s)\n' "$i" "$total" "$image" "$ns" "$pod" "$ctr" >&2
-  {
-    printf 'IMAGE\t%s\nKEY\t%s\nPOD\t%s/%s/%s\n' "$image" "$key" "$ns" "$pod" "$ctr"
-    ${TIMEOUT[@]+"${TIMEOUT[@]}"} "${K[@]}" exec -n "$ns" "$pod" -c "$ctr" -- sh -c "$PROBE" probe "" 1 "$DEEP" < /dev/null 2> "$err"
-  } > "$raw"
-  if ! grep -q '^BEGIN' "$raw"; then
-    printf 'EXECFAIL\t%s\n' "$(head -n 1 "$err" | tr '\t' ' ')" >> "$raw"
-  fi
+  case "$method" in
+    exec)   printf '[%d/%d] %s  (exec %s/%s -c %s)\n' "$i" "$total" "$image" "$ns" "$pod" "$ctr" >&2 ;;
+    image)  printf '[%d/%d] %s  (pull %s)\n' "$i" "$total" "$image" "$ref" >&2 ;;
+    rootfs) printf '[%d/%d] %s\n' "$i" "$total" "$ref" >&2 ;;
+  esac
+  printf 'IMAGE\t%s\nKEY\t%s\n' "$image" "$key" > "$raw"
+  case "$method" in
+    exec)
+      ${TIMEOUT[@]+"${TIMEOUT[@]}"} "${K[@]}" exec -n "$ns" "$pod" -c "$ctr" -- sh -c "$PROBE" probe "" 1 "$DEEP" < /dev/null >> "$raw" 2> "$err"
+      grep -q '^BEGIN' "$raw" || printf 'EXECFAIL\t%s\n' "$(head -n 1 "$err" | tr '\t' ' ')" >> "$raw" ;;
+    image)
+      [ -n "$WORK" ] || WORK=$(mktemp -d "${TMPDIR:-/tmp}/brotli-scan.XXXXXX")
+      d="$WORK/rootfs"
+      if export_image "$ref" "$d" "$err" < /dev/null; then
+        run_probe_local "$(cd "$d" && pwd -P)" >> "$raw"
+      else
+        printf 'PULLFAIL\t%s\n' "$ref: $(grep -v '^[[:space:]]*$' "$err" | tail -n 1 | tr '\t' ' ')" >> "$raw"
+      fi
+      chmod -R u+rwX "$d" 2>/dev/null; rm -rf "$d" ;;
+    rootfs)
+      r=$ref; [ "$r" = / ] && r=""   # scanning this machine: no root prefix
+      run_probe_local "$r" >> "$raw" ;;
+  esac
   evaluate < "$raw" > "$ev"
   verdict=$(awk -F'\t' '$1=="V"{print $2}' "$ev")
-  users=$(awk -F'\t' -v k="$key" '$1==k { w = $3 "/" ($6 != "-" ? $6 : "pod/" $4); if (!s[w]++) out = out (out ? ", " : "") w } END { print out }' "$OUT/containers.tsv")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$verdict" "$image" "$key" "$ns" "$pod" "$ctr" "$users" "$(summarize_findings "$ev")" >> "$OUT/report.tsv"
-  echo "        -> $verdict" >&2
+  if [ "$MODE" = cluster ]; then
+    users=$(awk -F'\t' -v k="$key" '$1==k { w = $3 "/" ($6 != "-" ? $6 : "pod/" $4); if (!s[w]++) out = out (out ? ", " : "") w } END { print out }' "$OUT/containers.tsv")
+  else users="-"; fi
+  [ "$method" = exec ] || { ns="-"; pod="-"; ctr="-"; }
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$verdict" "$image" "$key" "$ns" "$pod" "$ctr" "$users" "$(summarize_findings "$ev")" "$method" >> "$OUT/report.tsv"
+  printf '        -> %s\n' "$(paint "$verdict")" >&2
 done < "$OUT/targets.tsv"
 
-# Detail file: every finding per image
+# ---------------------------------------------------------------------------
+# Reports: findings.tsv, report.json, report.sarif
+# ---------------------------------------------------------------------------
 {
-  printf 'image\tstate\tkind\twhat\tnote\n'
+  printf 'image\tstate\tkind\twhat\tnote\tpath\n'
   n=0
-  while IFS="$(printf '\t')" read -r key image rest; do
+  while IFS="$TAB" read -r key image rest; do
     n=$((n + 1))
-    awk -F'\t' -v img="$image" '$1=="F" { print img "\t" $2 "\t" $3 "\t" $4 "\t" $5 }' "$OUT/raw/$n.eval"
+    awk -F'\t' -v img="$image" 'BEGIN { OFS = "\t" } $1=="F" { print img, $2, $3, $4, $5, $6 }' "$OUT/raw/$n.eval"
   done < "$OUT/targets.tsv"
 } > "$OUT/findings.tsv"
 
+if [ "$HAVE_JQ" = 1 ]; then
+  n=0
+  while IFS="$TAB" read -r verdict image key sns spod sctr users _summary method; do
+    n=$((n + 1))
+    jq -R -s --arg verdict "$verdict" --arg image "$image" --arg key "$key" --arg ns "$sns" --arg pod "$spod" \
+          --arg ctr "$sctr" --arg users "$users" --arg method "$method" '
+      split("\n") as $l
+      | { image: $image, image_id: $key, verdict: $verdict, method: $method,
+          os: ([$l[] | select(startswith("O\t")) | split("\t")[1]] | first // null),
+          sampled: (if $method == "exec" then {namespace: $ns, pod: $pod, container: $ctr} else null end),
+          workloads: (if $users == "-" or $users == "" then [] else ($users | split(", ")) end),
+          findings: [ $l[] | select(startswith("F\t")) | split("\t")
+                      | {state: .[1], kind: .[2], what: .[3], note: .[4], path: (.[5] // "")} ] }' "$OUT/raw/$n.eval"
+  done < <(tail -n +2 "$OUT/report.tsv") | jq -s --arg v "$VERSION" --arg url "$REPO_URL" --arg mode "$MODE" \
+      --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    { tool: {name: "brotli-k8s-scan", version: $v, url: $url},
+      cve: "CVE-2026-111497", scanned_at: $at, mode: $mode,
+      summary: (reduce .[] as $i ({VULNERABLE: 0, REVIEW: 0, PATCHED: 0, NO_BROTLI_FOUND: 0}; .[$i.verdict] += 1)),
+      images: . }' > "$OUT/report.json"
+
+  if [ "$SARIF" = 1 ]; then
+    jq --arg v "$VERSION" --arg url "$REPO_URL" '
+      { "$schema": "https://json.schemastore.org/sarif-2.1.0.json", version: "2.1.0",
+        runs: [ { tool: { driver: { name: "brotli-k8s-scan", version: $v, informationUri: $url,
+          rules: [
+            { id: "CVE-2026-111497", name: "VulnerableBrotliDecoder",
+              shortDescription: { text: "Vulnerable Brotli decoder (CVE-2026-111497)" },
+              fullDescription: { text: "Out-of-bounds write in the Google Brotli decoder 1.0.3-1.2.0. Crafted Brotli data can corrupt memory, leak memory or run code." },
+              help: { text: "Upgrade Brotli to 1.0.10 / 1.1.1 / 1.2.1, Node.js to 22.23.4 / 24.22.1 / 26.12.1, Bun to 1.4.4, Python Brotli to 1.2.1, brotlicffi to 1.2.1.0, .NET to 8.0.33 / 9.0.22 / 10.0.14, then rebuild the image." },
+              helpUri: "https://github.com/google/brotli/releases/tag/v1.2.1",
+              defaultConfiguration: { level: "error" },
+              properties: { "security-severity": "9.2", tags: ["security", "CVE-2026-111497"], precision: "high" } },
+            { id: "BROTLI-REVIEW", name: "BrotliNeedsReview",
+              shortDescription: { text: "Brotli decoder found, patch state could not be determined" },
+              fullDescription: { text: "A Brotli decoder or a component that may bundle one was found, but its patch state could not be determined automatically." },
+              helpUri: $url, defaultConfiguration: { level: "warning" },
+              properties: { tags: ["security", "CVE-2026-111497"] } } ] } },
+          results: [ .images[] as $img | $img.findings[] | select(.state == "VULN" or .state == "REVIEW")
+            | . as $f
+            | { ruleId: (if .state == "VULN" then "CVE-2026-111497" else "BROTLI-REVIEW" end),
+                level: (if .state == "VULN" then "error" else "warning" end),
+                message: { text: ("\($img.image): \($f.what)" + (if $f.path != "" and ($f.what | contains($f.path) | not) then " (\($f.path))" else "" end) + (if $f.note != "" then " - \($f.note)" else "" end)) },
+                locations: [ { physicalLocation: { artifactLocation: { uri: ($img.image + (if (.path | startswith("/")) then .path else "" end)) } } } ],
+                partialFingerprints: { "brotliFinding/v1": "\($img.image_id)|\(.kind)|\(.what)|\(.path)" } } ] } ] }' \
+      "$OUT/report.json" > "$OUT/report.sarif"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Console output
+# ---------------------------------------------------------------------------
+if [ "$total" = 1 ]; then
+  ev="$OUT/raw/1.eval"; verdict=$(awk -F'\t' '$1=="V"{print $2}' "$ev")
+  echo "Target: $(head -n 1 "$OUT/targets.tsv" | cut -f2)"
+  echo "Verdict: $verdict"
+  awk -F'\t' '$1=="F" { w = $4; if ($6 != "" && index(w, $6) == 0) w = w " (" $6 ")"; printf "  [%-6s] %-7s %s%s\n", $2, $3, w, ($5 ? "  -> " $5 : "") }' "$ev"
+else
+  echo
+  echo "=== Summary ($total unique images) ==="
+  for v in VULNERABLE REVIEW PATCHED NO_BROTLI_FOUND; do
+    printf '%-16s %s\n' "$(paint "$v")" "$(awk -F'\t' -v v="$v" 'NR>1 && $1==v' "$OUT/report.tsv" | wc -l | tr -d ' ')"
+  done
+  echo
+  awk -F'\t' 'NR>1 && ($1=="VULNERABLE" || $1=="REVIEW") { print $1 "\t" $2 "\t" $7 "\t" $8 }' "$OUT/report.tsv" |
+  while IFS="$TAB" read -r v img users f; do
+    printf '%s %s\n' "$(paint "$v")" "$img"
+    [ "$users" != "-" ] && printf '           used by: %s\n' "$users"
+    printf '           %s\n' "$f"
+  done
+fi
 echo
-echo "=== Summary ($total unique images) ==="
-for v in VULNERABLE REVIEW PATCHED NO_BROTLI_FOUND; do
-  printf '%-16s %s\n' "$v" "$(awk -F'\t' -v v="$v" 'NR>1 && $1==v' "$OUT/report.tsv" | wc -l | tr -d ' ')"
-done
-echo
-awk -F'\t' 'NR>1 && ($1=="VULNERABLE" || $1=="REVIEW") { printf "%-10s %s\n           used by: %s\n           %s\n", $1, $2, $7, $8 }' "$OUT/report.tsv"
-echo
-echo "Report:   $OUT/report.tsv   (one row per image)"
-echo "Details:  $OUT/findings.tsv (every finding)"
-echo "Raw:      $OUT/raw/"
+echo "Report:   $OUT/report.tsv"
+echo "Details:  $OUT/findings.tsv"
+[ -f "$OUT/report.json" ] && echo "JSON:     $OUT/report.json"
+[ -f "$OUT/report.sarif" ] && echo "SARIF:    $OUT/report.sarif"
+[ "$HAVE_JQ" = 0 ] && echo "(install jq to also get report.json)"
 [ "$DEEP" = 1 ] || echo "Tip: NO_BROTLI_FOUND only covers the usual suspects. Re-run with --deep to also fingerprint statically linked binaries."
 
 if awk -F'\t' 'NR>1 && $1=="VULNERABLE"{f=1} END{exit !f}' "$OUT/report.tsv"; then exit 1; fi

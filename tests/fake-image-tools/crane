@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Fake crane for offline tests: `crane export [--platform P] REF -` streams a
+# fixture filesystem as a tar. Unknown references fail like a missing image.
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=_map.sh
+. "$HERE/_map.sh"
+echo "crane $*" >> "${BROTLI_TEST_LOG:-/dev/null}"
+[ "${1:-}" = export ] || { echo "fake crane: unsupported: $*" >&2; exit 2; }
+shift
+[ "${1:-}" = --platform ] && shift 2
+ref=$1
+fx=$(fixture_for "$ref") || { echo "Error: GET https://registry.test/v2/: MANIFEST_UNKNOWN: manifest unknown; $ref" >&2; exit 1; }
+tar -C "$BROTLI_TEST_FIXTURES/$fx" -cf - .

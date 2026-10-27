@@ -3,10 +3,12 @@
 # into fake container filesystems under tests/.cache/fixtures.
 #
 # This is the ONLY step that needs network access (git clone of google/brotli,
-# PyPI wheels, Node.js binaries from the npm registry). The tests themselves
+# PyPI wheels, Node.js binaries from the npm registry, Ubuntu packages,
+# the SARIF schema). The tests themselves
 # run offline: see tests/run-tests.sh.
 #
-# Needs: git, cmake, a C compiler (cc), python3 with pip, npm, tar.
+# Needs: git, cmake, a C compiler (cc), python3 with pip, npm, tar, curl.
+# Optional: dpkg-deb or ar (Ubuntu backport fixture).
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -15,7 +17,7 @@ FX="$C/fixtures"
 mkdir -p "$C"
 cd "$C"
 
-for t in git cmake cc python3 npm tar; do
+for t in git cmake cc python3 npm tar curl; do
   command -v "$t" >/dev/null 2>&1 || { echo "missing tool: $t" >&2; exit 2; }
 done
 
@@ -76,6 +78,31 @@ nodebin() {  # $1=version
 }
 nodebin 22.23.3; nodebin 22.23.4
 
+echo "== Ubuntu libbrotli1: unpatched 1.1.0-2build2 and the backport 1.1.0-2ubuntu0.1 (same version string)"
+UBU_OK=0
+case "$NODE_ARCH" in x64) UARCH=amd64; MIRROR=http://archive.ubuntu.com/ubuntu; SEC=http://security.ubuntu.com/ubuntu ;;
+                     arm64) UARCH=arm64; MIRROR=http://ports.ubuntu.com/ubuntu-ports; SEC=$MIRROR ;; esac
+debx() {  # $1=.deb $2=dest : extract without installing
+  mkdir -p "$2"
+  if command -v dpkg-deb >/dev/null 2>&1; then dpkg-deb -x "$1" "$2"
+  else (d=$(mktemp -d) && cd "$d" && ar x "$1" && tar -xf data.tar.* -C "$2" && rm -rf "$d"); fi
+}
+if mkdir -p ubuntu && (cd ubuntu &&
+     { [ -f old.deb ] || curl -fsSL -o old.deb "$MIRROR/pool/main/b/brotli/libbrotli1_1.1.0-2build2_${UARCH}.deb"; } &&
+     { [ -f fixed.deb ] || curl -fsSL -o fixed.deb "$SEC/pool/main/b/brotli/libbrotli1_1.1.0-2ubuntu0.1_${UARCH}.deb"; } &&
+     rm -rf old fixed && debx "$PWD/old.deb" "$PWD/old" && debx "$PWD/fixed.deb" "$PWD/fixed"); then
+  UBU_OK=1
+else
+  echo "   (skipped: could not download/extract the Ubuntu packages; those tests will be skipped)"
+fi
+
+echo "== test helpers: yara-python, jsonschema, SARIF 2.1.0 schema"
+[ -f pylib/.ok ] || { python3 -m pip install -q --target pylib yara-python jsonschema && touch pylib/.ok; } ||
+  echo "   (skipped: pip install failed; YARA and SARIF schema tests will be skipped)"
+[ -f sarif-schema-2.1.0.json ] || curl -fsSL -o sarif-schema-2.1.0.json \
+  https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json ||
+  echo "   (skipped: SARIF schema download failed)"
+
 echo "== assembling fake container filesystems"
 rm -rf "$FX"; mkdir -p "$FX"
 put() { mkdir -p "$FX/$1/$(dirname "$2")"; cp "$3" "$FX/$1/$2"; }
@@ -115,5 +142,23 @@ head -c 122880 /dev/zero >> "$FX/static/opt/app/server"
 
 # none: no Brotli, but a Java jar that may bundle it
 mkdir -p "$FX/none/opt/lib"; : > "$FX/none/opt/lib/brotli4j-1.16.0.jar"
+
+# Ubuntu backport: identical version string, different patch state
+if [ "$UBU_OK" = 1 ]; then
+  for k in old fixed; do
+    mkdir -p "$FX/ubuntu-$k"; cp -a "ubuntu/$k/." "$FX/ubuntu-$k/"
+    v=1.1.0-2build2; [ "$k" = fixed ] && v=1.1.0-2ubuntu0.1
+    mkdir -p "$FX/ubuntu-$k/var/lib/dpkg"
+    printf 'Package: libbrotli1\nStatus: install ok installed\nVersion: %s\n\n' "$v" > "$FX/ubuntu-$k/var/lib/dpkg/status"
+  done
+fi
+
+# .NET runtime layout (SYNTHETIC: the "native lib" is the stripped static test
+# program, i.e. Brotli without a readable error table, so the verdict must
+# come from the runtime version in the path)
+for v in 10.0.7 10.0.14; do
+  d="$FX/dotnet-$v/usr/share/dotnet/shared/Microsoft.NETCore.App/$v"
+  mkdir -p "$d"; cp app-static "$d/libSystem.IO.Compression.Native.so"
+done
 
 echo "fixtures ready in $FX"
