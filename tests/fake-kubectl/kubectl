@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fake kubectl for the offline tests. Answers `get pods -o json` with
-# tests/pods.json and runs the probe of `exec` against a fixture filesystem
+# tests/pods.json (or $BROTLI_TEST_PODS) and runs the probe of `exec` against a fixture filesystem
 # chosen by the pod name prefix (vuln-, fixed-, old109-, static-, ...).
 #   distroless-*  -> simulates an image without a shell
 #   exec-<fx>-*   -> runs the probe in "inside the container" mode (executes
@@ -12,7 +12,7 @@ echo "$*" | cut -c1-120 >> "${BROTLI_TEST_LOG:-/dev/null}"
 
 while [ "${1:-}" = "--context" ]; do shift 2; done
 case "${1:-}" in
-  get) cat "$HERE/../pods.json" ;;
+  get) cat "${BROTLI_TEST_PODS:-$HERE/../pods.json}" ;;
   exec)
     shift; pod=""
     while [ "$1" != "--" ]; do

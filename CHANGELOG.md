@@ -17,7 +17,8 @@
 - Terminal output: colour-coded finding states, summary columns stay aligned
   with colours on, and the `--deep` tip only appears when something was
   `NO_BROTLI_FOUND`.
-- README: banner, fingerprint diagram and screenshots of real scanner output.
+- README: banner, fingerprint diagram and screenshots of real scanner output,
+  reproducible with `docs/images/src/build-images.sh`; `CONTRIBUTING.md`.
 
 ## 0.2.0 (2026-10-27)
 

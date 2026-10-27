@@ -230,6 +230,11 @@ rules against the same binaries. In GitHub Actions it runs on x86-64 and arm64
 with every fixture mandatory, so a skipped download fails the build instead of
 silently reducing coverage.
 
+## Contributing
+
+Tests, regenerating the README images, keeping fixed versions current and
+releasing: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 MIT, see [LICENSE](LICENSE). No warranty: a clean result does not prove that a
