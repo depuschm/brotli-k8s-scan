@@ -106,6 +106,13 @@ for sh in $SHELLS; do
       sed -n 's/^  \[\(VULN  \|OK    \)\] \(binary\|dotnet\) */        decided by: \2 /p' "$OUTF" | grep -i compression | head -n 1
     done
   else skip "official Microsoft .NET runtimes not downloaded (CI downloads them)"; fi
+  if [ -d "$BROTLI_TEST_FIXTURES/bunold" ]; then
+    rootfs bunold "$sh";     expect_eq "official Bun 1.4.3 binary: vulnerable (fingerprint)" "$(verdict "$OUTF")" VULNERABLE
+    rootfs bunfixed "$sh";   expect_eq "official Bun 1.4.4 binary: patched (fingerprint)"    "$(verdict "$OUTF")" PATCHED
+    rootfs envoyold "$sh";   expect_eq "official Envoy 1.36.11, not executed: review"        "$(verdict "$OUTF")" REVIEW
+    expect_has "Envoy without exec: says why and what to do" "$OUTF" "Envoy builds keep no Brotli error table, so its version decides"
+    rootfs envoyfixed "$sh"; expect_eq "official Envoy 1.36.12, not executed: review"        "$(verdict "$OUTF")" REVIEW
+  else skip "Envoy/Bun fixtures not built"; fi
   if [ -d "$BROTLI_TEST_FIXTURES/ubuntu-old" ]; then
     rootfs ubuntu-old "$sh";   expect_eq "Ubuntu libbrotli1 1.1.0-2build2: vulnerable"           "$(verdict "$OUTF")" VULNERABLE
     rootfs ubuntu-fixed "$sh"; expect_eq "Ubuntu libbrotli1 1.1.0-2ubuntu0.1 (backport): patched" "$(verdict "$OUTF")" PATCHED
@@ -134,6 +141,7 @@ for sh in $SHELLS; do
   expect_eq "api image vulnerable"                 "$(row "$REP" registry.test/api:1.4)" VULNERABLE
   expect_eq "web image patched"                    "$(row "$REP" registry.test/web:2)" PATCHED
   expect_eq "distroless needs review"              "$(row "$REP" registry.test/distroless:1)" REVIEW
+  expect_has "distroless: the exec error is reported" "$REP/report.tsv" "executable file not found"
   expect_eq "1.0.9 proxy vulnerable"               "$(row "$REP" registry.test/proxy:1.0)" VULNERABLE
   expect_eq "1.0.10 proxy patched"                 "$(row "$REP" registry.test/proxy:1.1)" PATCHED
   expect_eq "static job not found without --deep"  "$(row "$REP" registry.test/job:3)" NO_BROTLI_FOUND
@@ -144,6 +152,16 @@ for sh in $SHELLS; do
   expect_has "workloads listed"                    "$REP/report.tsv" "shop/ReplicaSet/api-7d9f"
   expect_has "context passed to kubectl"           "$LOG" "--context test-ctx get pods --all-namespaces -o json"
   expect_eq "one exec per unique image"            "$(grep -c ' exec ' "$LOG")" 8
+
+  if [ -d "$BROTLI_TEST_FIXTURES/envoyold" ]; then
+    BROTLI_TEST_PODS="$HERE/pods-runtimes.json" cluster "runtimes-$sh"
+    expect_eq "exec: Envoy 1.36.11 (envoy --version) vulnerable" "$(row "$REP" registry.test/envoy:1.36.11)" VULNERABLE
+    expect_eq "exec: Envoy 1.36.12 (envoy --version) patched"    "$(row "$REP" registry.test/envoy:1.36.12)" PATCHED
+    expect_eq "exec: Bun 1.4.3 vulnerable"                       "$(row "$REP" registry.test/bun:1.4.3)" VULNERABLE
+    expect_eq "exec: Bun 1.4.4 patched"                          "$(row "$REP" registry.test/bun:1.4.4)" PATCHED
+    expect_has "exec: reads envoy --version"                     "$REP/findings.tsv" "$(printf 'VULN\tenvoy\tenvoy 1.36.11\t')"
+    expect_has "exec: reads bun --version"                       "$REP/findings.tsv" "$(printf 'OK\tbun\tbun 1.4.4\t')"
+  else skip "Envoy/Bun fixtures not built (exec mode)"; fi
 
   cluster "deep-$sh" --deep -n batch
   expect_has "namespace passed to kubectl"         "$LOG" "get pods -n batch -o json"

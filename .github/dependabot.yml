@@ -1,0 +1,13 @@
+# Keeps the SHA-pinned GitHub Actions up to date (one grouped pull request a
+# week). The tests run on every Dependabot pull request like on any other.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

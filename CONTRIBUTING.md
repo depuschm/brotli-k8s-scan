@@ -31,6 +31,11 @@ tests/run-tests.sh        # offline: re-runs itself in a network namespace witho
   `tr -c ' -~' '\n'` first. In image and `--rootfs` mode nothing from the
   scanned filesystem may be executed.
 - Lint: `shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fake-*/*`.
+- End-to-end: `tests/e2e-kind.sh` runs against a real kind cluster (CI job
+  `e2e (kind)`). Needs docker, kind, kubectl, crane and a static busybox.
+  Without kind (e.g. no access to kind's node image), `E2E_PHASES=images`
+  still checks the test images, a local registry and real `docker`/`crane`
+  image scans.
 
 ## README images
 
@@ -62,6 +67,16 @@ vendor advisory in the commit message:
   Python rules, the SARIF help text
 - `README.md` (What it checks), `docs/how-detection-works.md`, `CHANGELOG.md`
 - `yara/brotli_cve_2026_111497.yar` only if the fingerprint itself changes
+
+## Upkeep (automatic)
+
+- **Dependabot** opens one grouped pull request a week when a pinned GitHub
+  Action has a new release; the tests run on it like on any change.
+- **Weekly test run** (Mondays) builds every fixture *without* the cache, so a
+  dead download link (Ubuntu removes superseded packages) shows up as a
+  failed run and an email, not during a release.
+- **OpenSSF Scorecard** rates the repository's security practices; results in
+  the Security tab and on the README badge.
 
 ## Releasing
 

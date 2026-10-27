@@ -3,6 +3,7 @@
 </p>
 
 [![tests](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml/badge.svg)](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/depuschm/brotli-k8s-scan/badge)](https://scorecard.dev/viewer/?uri=github.com/depuschm/brotli-k8s-scan)
 ![CVE-2026-111497](https://img.shields.io/badge/CVE--2026--111497-critical-red)
 ![license MIT](https://img.shields.io/badge/license-MIT-blue)
 ![dependencies: bash](https://img.shields.io/badge/dependencies-bash%20%2B%20coreutils-informational)
@@ -77,11 +78,11 @@ builds from the test suite; registry and workload names are examples.</sub>
 |---|---|---|---|
 | Google Brotli (C library) | 1.0.3 – 1.2.0 | 1.0.10, 1.1.1, 1.2.1 (and distro backports) | binary fingerprint |
 | Node.js | 22.x, 24.x, 26.x before the fix; 20.x and older get no fix | 22.23.4, 24.22.1, 26.12.1 | `node -v` + fingerprint |
-| Bun | 1.4.3 and earlier | 1.4.4 | `bun --version` + fingerprint |
+| Bun | 1.4.3 and earlier | 1.4.4 | fingerprint (decides on its own, also in image scans) + `bun --version` |
 | Python `Brotli` / `brotlicffi` | ≤ 1.2.0 / ≤ 1.2.0.x | 1.2.1 / 1.2.1.0 | `*.dist-info` in every venv + fingerprint of the wheel |
 | .NET | before the fix | 8.0.33, 9.0.22, 10.0.14 | fingerprint of `libSystem.IO.Compression.Native.so`, else the runtime version (framework folder or a self-contained app's `*.deps.json`); runtimes built against the system `libbrotli` (e.g. Ubuntu's .NET 10) are judged by that library |
-| Envoy | 1.36 – 1.39 before the fix | 1.36.12, 1.37.8, 1.38.6, 1.39.3, 1.40.0 | `envoy --version` + fingerprint |
-| Istio | 1.29 – 1.31 before the fix | 1.29.9, 1.30.6, 1.31.2 | fingerprint of the `envoy` binary in the proxy image |
+| Envoy | 1.36 – 1.39 before the fix | 1.36.12, 1.37.8, 1.38.6, 1.39.3, 1.40.0 | `envoy --version`, in the default cluster mode only: official Envoy builds keep no decoder error table, so image and `--no-exec` scans report Envoy as `REVIEW` |
+| Istio | 1.29 – 1.31 before the fix | 1.29.9, 1.30.6, 1.31.2 | not tested: the Istio proxy runs Istio's own Envoy build; check your Istio version |
 | anything else with Brotli compiled in (Pillow, curl, nginx modules, Electron apps, ...) | | | binary fingerprint |
 
 Envoy and Istio are only exposed if the Brotli decompressor is configured.
@@ -185,6 +186,8 @@ Found a wrong verdict or a security problem? See [SECURITY.md](SECURITY.md).
   reimplementations do not contain it; check their own advisories.
 - Java jars that bundle the native library (e.g. brotli4j) are compressed and
   are listed as `REVIEW`.
+- Envoy keeps no decoder error table, so without `exec` (image and `--no-exec`
+  scans) its patch state is unknown and it is reported as `REVIEW`.
 - Stripped, statically linked binaries can lose the decoder's error table; they
   are found (with `--deep`) but reported as `REVIEW`.
 - Cluster modes see running pods only. CronJobs between runs or
@@ -212,7 +215,7 @@ Real vulnerable and fixed builds are assembled into fake container
 filesystems, with fake `kubectl`, `crane` and `docker`:
 
 - Brotli 1.0.9 / 1.0.10 / 1.2.0 / 1.2.1 built from source, plus a stripped static program
-- Node.js 22.23.3 / 22.23.4 official binaries
+- Node.js 22.23.3 / 22.23.4, Bun 1.4.3 / 1.4.4 and Envoy 1.36.11 / 1.36.12 official binaries
 - Python `Brotli` 1.2.0 / 1.2.1 and `brotlicffi` 1.2.0.1 / 1.2.1.0 wheels
 - Ubuntu `libbrotli1` 1.1.0-2build2 / 1.1.0-2ubuntu0.1 (same version string, backported fix)
 - .NET: Ubuntu's .NET 8.0.32 and 10.0.13 runtimes, official Microsoft runtimes
@@ -222,6 +225,11 @@ filesystems, with fake `kubectl`, `crane` and `docker`:
 tests/build-fixtures.sh   # once; downloads sources and binaries (needs network; BROTLI_TEST_STRICT=1 makes every fixture mandatory)
 tests/run-tests.sh        # offline: re-runs itself under `unshare -rn` without network
 ```
+
+An end-to-end test (`tests/e2e-kind.sh`, CI job `e2e (kind)`) runs the scanner
+against a **real Kubernetes cluster** (kind) with a real registry, real
+`kubectl exec`, `crane` and `docker`. Its test images are built from the same
+real binaries plus a static BusyBox shell, and one image has no shell at all.
 
 The suite repeats every probe test with `sh`, `dash` and, if installed,
 BusyBox (with only BusyBox tools in `PATH`, like an Alpine image). It also

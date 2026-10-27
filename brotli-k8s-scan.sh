@@ -315,6 +315,7 @@ evaluate() {
       else if (s == "VULNERABLE_10X") add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.0.x without fix)" (dv != "" ? "; " fixhint("dotnet") : ""), p)
       else if (dv != "" && rt_state("dotnet", dv) == "OK") add("OK", "dotnet", ".NET " dv, "runtime version contains the fix", p)
       else if (dv != "")              add("VULN", "dotnet", ".NET " dv, fixhint("dotnet"), p)
+      else if (p ~ /(^|\/)envoy$/)    add("REVIEW", "envoy", p, "Envoy builds keep no Brotli error table, so its version decides: scan the running pod in the default cluster mode, or run envoy --version (fixed: 1.36.12 / 1.37.8 / 1.38.6 / 1.39.3 / 1.40.0)", p)
       else                            add("REVIEW", "binary", p, "contains Brotli decoder, version not detectable (stripped). Ask vendor / rebuild", p)
     }
     for (i = 1; i <= nd; i++) {
@@ -445,7 +446,14 @@ while IFS="$TAB" read -r key image ns pod ctr method ref; do
   case "$method" in
     exec)
       ${TIMEOUT[@]+"${TIMEOUT[@]}"} "${K[@]}" exec -n "$ns" "$pod" -c "$ctr" -- sh -c "$PROBE" probe "" 1 "$DEEP" < /dev/null >> "$raw" 2> "$err"
-      grep -q '^BEGIN' "$raw" || printf 'EXECFAIL\t%s\n' "$(head -n 1 "$err" | tr '\t' ' ')" >> "$raw" ;;
+      xrc=$?
+      if ! grep -q '^BEGIN' "$raw"; then
+        # the reason may be on stderr (kubectl) or on stdout (runtime message)
+        msg=$(grep -v '^[[:space:]]*$' "$err" | head -n 1)
+        [ -n "$msg" ] || msg=$(sed -n '3,$p' "$raw" | grep -v '^[[:space:]]*$' | head -n 1)
+        [ -n "$msg" ] || msg="kubectl exec failed with exit code $xrc"
+        printf 'EXECFAIL\t%s\n' "$(printf '%s' "$msg" | tr -d '\r' | tr '\t' ' ')" >> "$raw"
+      fi ;;
     image)
       [ -n "$WORK" ] || WORK=$(mktemp -d "${TMPDIR:-/tmp}/brotli-scan.XXXXXX")
       d="$WORK/rootfs"

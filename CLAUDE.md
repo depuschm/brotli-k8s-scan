@@ -24,4 +24,8 @@ Working rules for this repository:
 - **Claims must match evidence.** The fingerprint shows a fixed or vulnerable
   decoder only when the error table is present; stripped builds are
   `REVIEW`. Do not overstate this in README, docs or images.
+- The real-cluster test (`tests/e2e-kind.sh`) needs kind's node image from
+  Docker Hub; where that is blocked, run it with `E2E_PHASES=images` locally
+  and rely on the CI job `e2e (kind)` for the cluster part. Failures there are
+  reported as GitHub annotations (readable via the check-runs API).
 - Do not commit `tests/.cache/` or `docs/images/src/.cache/`.

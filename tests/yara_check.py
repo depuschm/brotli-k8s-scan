@@ -28,6 +28,11 @@ cases = [
     ("ubuntu-fixed/usr/lib/x86_64-linux-gnu/libbrotlidec.so.1.1.0", P),
     ("ubuntu-old/usr/lib/aarch64-linux-gnu/libbrotlidec.so.1.1.0", V),
     ("ubuntu-fixed/usr/lib/aarch64-linux-gnu/libbrotlidec.so.1.1.0", P),
+    # official Bun / Envoy release binaries; Envoy keeps no error table
+    ("bunold/usr/local/bin/bun", V),
+    ("bunfixed/usr/local/bin/bun", P),
+    ("envoyold/usr/local/bin/envoy", U),
+    ("envoyfixed/usr/local/bin/envoy", U),
     # real .NET runtimes
     ("dotnet8-ubuntu/usr/lib/dotnet/shared/Microsoft.NETCore.App/8.0.32/libSystem.IO.Compression.Native.so", V),
     ("dotnet10-ubuntu-old/usr/lib/dotnet/shared/Microsoft.NETCore.App/10.0.13/libSystem.IO.Compression.Native.so", None),
