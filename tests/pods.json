@@ -1,0 +1,37 @@
+{
+  "items": [
+    {"metadata": {"namespace": "shop", "name": "vuln-api-7d9f-abc", "ownerReferences": [{"kind": "ReplicaSet", "name": "api-7d9f"}]},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "api", "image": "registry.test/api:1.4", "imageID": "registry.test/api@sha256:aaa", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "shop", "name": "vuln-api-7d9f-def", "ownerReferences": [{"kind": "ReplicaSet", "name": "api-7d9f"}]},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "api", "image": "registry.test/api:1.4", "imageID": "registry.test/api@sha256:aaa", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "web", "name": "fixed-web-0", "ownerReferences": [{"kind": "StatefulSet", "name": "web"}]},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "web", "image": "registry.test/web:2", "imageID": "registry.test/web@sha256:fff", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "web", "name": "fixed-web-1", "ownerReferences": [{"kind": "StatefulSet", "name": "web"}]},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "web", "image": "registry.test/web:2", "imageID": "registry.test/web@sha256:fff", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "ops", "name": "distroless-x-1"},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "main", "image": "registry.test/distroless:1", "imageID": "", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "ops", "name": "old109-proxy-1", "ownerReferences": [{"kind": "DaemonSet", "name": "proxy"}]},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "proxy", "image": "registry.test/proxy:1.0", "imageID": "registry.test/proxy@sha256:109", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "ops", "name": "old1010-proxy-1", "ownerReferences": [{"kind": "DaemonSet", "name": "proxy2"}]},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "proxy", "image": "registry.test/proxy:1.1", "imageID": "registry.test/proxy@sha256:1010", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "batch", "name": "static-job-1"},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "job", "image": "registry.test/job:3", "imageID": "registry.test/job@sha256:sss", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "dev", "name": "exec-vuln-1"},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "app", "image": "registry.test/exec-vuln:1", "imageID": "registry.test/exec-vuln@sha256:ev", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "dev", "name": "exec-fixed-1"},
+     "status": {"phase": "Running", "containerStatuses": [
+       {"name": "app", "image": "registry.test/exec-fixed:1", "imageID": "registry.test/exec-fixed@sha256:ef", "state": {"running": {}}}]}},
+    {"metadata": {"namespace": "ops", "name": "pending-1"},
+     "status": {"phase": "Pending", "containerStatuses": [
+       {"name": "x", "image": "registry.test/never:1", "imageID": "", "state": {"waiting": {}}}]}}
+  ]
+}

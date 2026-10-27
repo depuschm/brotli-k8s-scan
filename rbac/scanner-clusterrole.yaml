@@ -1,0 +1,27 @@
+# Minimal permissions for brotli-k8s-scan.sh.
+# pods/exec is powerful: bind this only for the duration of the scan, then delete the binding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: brotli-scanner
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+# Example binding to a single user. Replace the subject with your user or group.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: brotli-scanner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: brotli-scanner
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: security-scanner@example.com

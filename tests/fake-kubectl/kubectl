@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Fake kubectl for the offline tests. Answers `get pods -o json` with
+# tests/pods.json and runs the probe of `exec` against a fixture filesystem
+# chosen by the pod name prefix (vuln-, fixed-, old109-, static-, ...).
+#   distroless-*  -> simulates an image without a shell
+#   exec-<fx>-*   -> runs the probe in "inside the container" mode (executes
+#                    the fixture's node binary) with PATH limited to the fixture
+set -u
+FX="${BROTLI_TEST_FIXTURES:?}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+echo "$*" | cut -c1-120 >> "${BROTLI_TEST_LOG:-/dev/null}"
+
+while [ "${1:-}" = "--context" ]; do shift 2; done
+case "${1:-}" in
+  get) cat "$HERE/../pods.json" ;;
+  exec)
+    shift; pod=""
+    while [ "$1" != "--" ]; do
+      case "$1" in -n|-c) shift 2 ;; *) pod=$1; shift ;; esac
+    done
+    shift                      # --
+    probe="$3"; deep="$7"      # sh -c PROBE probe "" 1 DEEP
+    sh="${TEST_SH:-sh}"
+    case "$pod" in
+      distroless-*)
+        echo 'error: Internal error occurred: failed to exec in container: exec: "sh": executable file not found in $PATH' >&2
+        exit 126 ;;
+      exec-*)
+        fx=${pod#exec-}; fx=${fx%%-*}
+        PATH="$FX/$fx/usr/local/bin:${BROTLI_TEST_EXEC_PATH:-/usr/bin:/bin}" exec $sh -c "$probe" probe "$FX/$fx" 1 "$deep" ;;
+      *)
+        fx=${pod%%-*}
+        exec $sh -c "$probe" probe "$FX/$fx" 0 "$deep" ;;
+    esac ;;
+  *) echo "fake kubectl: unsupported: $*" >&2; exit 2 ;;
+esac
