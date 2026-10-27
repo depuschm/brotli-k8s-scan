@@ -247,6 +247,14 @@ expect_has "list: pull error reported"             "$REP/report.tsv" "MANIFEST_U
 expect_eq "list: exit 1"                           "$RC" 1
 leftover=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'brotli-scan.*' -newer "$TMP/list.txt" 2>/dev/null | wc -l | tr -d ' ')
 expect_eq "image mode: temporary files removed"    "$leftover" 0
+# a crafted image: entries that try to write outside the unpack directory
+mkdir -p "$TMP/htmp"; find /tmp -maxdepth 1 -name 'pwned-*' -delete 2>/dev/null
+python3 -I "$HERE/hostile_tar.py" "$TMP/hostile.tar" "$BROTLI_TEST_FIXTURES/vuln/usr/local/bin/node"
+TMPDIR="$TMP/htmp" BROTLI_TEST_HOSTILE_TAR="$TMP/hostile.tar" image hostile crane --image registry.test/hostile-tar:1
+expect_eq "hostile image: still vulnerable"        "$(verdict "$OUTF")" VULNERABLE
+expect_has "hostile image: the real node decides"  "$REP/findings.tsv" "$(printf 'VULN\tbinary\t/usr/local/bin/node\t')"
+expect_eq "hostile image: nothing written outside the unpack directory" \
+  "$(find "$TMP" /tmp -maxdepth 4 -name 'pwned-*' 2>/dev/null | wc -l | tr -d ' ')" 0
 
 # --- JSON / SARIF ------------------------------------------------------------
 echo "JSON and SARIF output"

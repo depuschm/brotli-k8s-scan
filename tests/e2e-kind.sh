@@ -12,6 +12,8 @@
 #   images   build the test images, start a local registry (crane), push
 #   cluster  create a kind cluster that pulls from that registry, deploy
 #   scan     run the scanner in all modes and check the verdicts
+#   job      run the scanner's container image as a Kubernetes Job with
+#            deploy/job.yaml; needs E2E_SCANNER_IMAGE (from image/build.sh)
 #
 # Needs: docker, kind, kubectl, crane, jq, a static busybox ($BUSYBOX),
 # and the test fixtures (tests/build-fixtures.sh). Linux. Used by CI
@@ -48,6 +50,7 @@ has() { case " $PHASES " in *" $1 "*) return 0 ;; esac; return 1; }
 for t in docker jq; do command -v "$t" >/dev/null 2>&1 || die "tool $t available"; done
 has images && { command -v crane >/dev/null 2>&1 || die "tool crane available"; }
 has cluster && { for t in kind kubectl; do command -v "$t" >/dev/null 2>&1 || die "tool $t available"; done; }
+has job && { [ -n "${E2E_SCANNER_IMAGE:-}" ] || die "E2E_SCANNER_IMAGE set" "build it with image/build.sh TAG"; }
 for f in vuln fixed ubuntu-old ubuntu-fixed; do [ -d "$FX/$f" ] || die "fixture $f present" "run tests/build-fixtures.sh first"; done
 echo "work dir: $W"
 
@@ -157,6 +160,34 @@ if has scan; then
   bash "$SCAN" -n "$NS" --dry-run -o "$W/dry" > "$W/dry.out" 2>&1; rc=$?
   expect_eq "dry-run: exit 0" "$rc" 0
   expect_eq "dry-run: lists 5 images" "$(grep -c '^  exec ' "$W/dry.out")" 5
+fi
+
+# ---------------------------------------------------------------- job
+if has job; then
+  echo "== job: the scanner's container image as a Kubernetes Job (deploy/job.yaml)"
+  kind load docker-image "$E2E_SCANNER_IMAGE" --name "$CLUSTER" > "$W/kind-load.log" 2>&1 ||
+    die "scanner image loaded into kind" "$(tail -n 2 "$W/kind-load.log")"
+  sed -e "s|image: ghcr.io/depuschm/brotli-k8s-scan:.*|image: $E2E_SCANNER_IMAGE|" \
+      -e "s|args: \[\].*|args: [\"-n\", \"$NS\"]|" "$ROOT/deploy/job.yaml" > "$W/job.yaml"
+  grep -q "image: $E2E_SCANNER_IMAGE" "$W/job.yaml" && grep -q "args: \[\"-n\"" "$W/job.yaml" || die "job manifest prepared"
+  kubectl apply -f "$W/job.yaml" > "$W/job-apply.log" 2>&1 || die "deploy/job.yaml applies" "$(tail -n 3 "$W/job-apply.log")"
+  for _ in $(seq 1 120); do
+    st=$(kubectl -n brotli-scan get job brotli-k8s-scan -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null)
+    case "$st" in 1/*|*/1) break ;; esac; sleep 3
+  done
+  kubectl -n brotli-scan logs job/brotli-k8s-scan > "$W/job.log" 2>&1
+  code=$(kubectl -n brotli-scan get pods -l job-name=brotli-k8s-scan \
+    -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null)
+  expect_eq "job: finished with exit 1 (vulnerable found)" "$code" 1
+  jrow() { awk -F'\t' -v img="$1" '$2 == img { print $1 }' "$W/job.log"; }
+  expect_eq "job: Node 22.23.3 image vulnerable"        "$(jrow "$REG/e2e/vuln:1")" VULNERABLE
+  expect_eq "job: Node 22.23.4 image patched"           "$(jrow "$REG/e2e/fixed:1")" PATCHED
+  expect_eq "job: Ubuntu libbrotli1 1.1.0-2build2 vulnerable" "$(jrow "$REG/e2e/unpatched:1")" VULNERABLE
+  expect_eq "job: Ubuntu backport (also 1.1.0) patched" "$(jrow "$REG/e2e/backport:1")" PATCHED
+  expect_eq "job: image without a shell needs review"   "$(jrow "$REG/e2e/noshell:1")" REVIEW
+  expect_has "job: summary in the log (5 unique images)" "$W/job.log" "=== Summary (5 unique images) ==="
+  note "job verdicts: $(awk -F'\t' '$2 ~ /e2e/ {printf "%s=%s ", $2, $1}' "$W/job.log")"
+  kubectl delete -f "$W/job.yaml" --wait=false >/dev/null 2>&1
 fi
 
 if has images; then

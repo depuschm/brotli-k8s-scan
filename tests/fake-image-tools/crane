@@ -10,5 +10,7 @@ echo "crane $*" >> "${BROTLI_TEST_LOG:-/dev/null}"
 shift
 [ "${1:-}" = --platform ] && shift 2
 ref=$1
+# a crafted image filesystem (tests/hostile_tar.py)
+case "$ref" in *hostile-tar*) exec cat "${BROTLI_TEST_HOSTILE_TAR:?}" ;; esac
 fx=$(fixture_for "$ref") || { echo "Error: GET https://registry.test/v2/: MANIFEST_UNKNOWN: manifest unknown; $ref" >&2; exit 1; }
 tar -C "$BROTLI_TEST_FIXTURES/$fx" -cf - .
