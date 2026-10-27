@@ -1,5 +1,7 @@
 # Version numbers lie: detecting the Brotli CVE-2026-111497 fix in any binary
 
+![Ubuntu 24.04 libbrotlidec.so.1.1.0 before and after the security update: same version, but only the fixed one has the _ERROR_FORMAT_BLOCK_SWITCH entry in its error table.](images/fingerprint.png)
+
 CVE-2026-111497 ("Broccoli2Shell", "Node2Shell", "HTTP2Shell") is an
 out-of-bounds write in the Google Brotli decoder 1.0.3 - 1.2.0. Brotli is
 copied into a lot of software: Node.js, Bun, Envoy, the Python `Brotli` and
@@ -29,8 +31,9 @@ BROTLI_ERROR_CODE(_ERROR_FORMAT_, BLOCK_SWITCH, -17) SEPARATOR
 
 The decoder's `BrotliDecoderErrorString()` turns every error code into its
 name, so the **name of every error code ends up as a plain string in the
-binary**. Before the fix the table has no `BLOCK_SWITCH` entry, after the fix it
-has one. Any backport that cherry-picks the fix adds it too.
+binary**. Before the fix, code -17 is marked "reserved" in the header and the
+table has no entry for it; after the fix it has one. Any backport that
+cherry-picks the fix adds it too.
 
 ```
 error table present, "_ERROR_FORMAT_BLOCK_SWITCH" absent   ->  vulnerable decoder

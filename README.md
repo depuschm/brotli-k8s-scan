@@ -1,4 +1,6 @@
-# brotli-k8s-scan
+<p align="center">
+  <img src="docs/images/banner.png" alt="brotli-k8s-scan: CVE-2026-111497 (Broccoli2Shell / Node2Shell / HTTP2Shell). Version numbers lie, check the binary." width="100%">
+</p>
 
 [![tests](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml/badge.svg)](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml)
 ![CVE-2026-111497](https://img.shields.io/badge/CVE--2026--111497-critical-red)
@@ -19,17 +21,20 @@ nginx and other software.**
 | an app with its own private copy | usually nothing | ? |
 
 Scanners that compare version numbers get these wrong. This tool also looks
-**inside the binary**: the fix added a new decoder error code, and its name
-(`_ERROR_FORMAT_BLOCK_SWITCH`) is compiled into every fixed decoder. No name,
-no fix. [How it works](docs/how-detection-works.md).
+**inside the binary**: the fix added a new decoder error code, and its name,
+`_ERROR_FORMAT_BLOCK_SWITCH`, ends up in the decoder's error table. A fixed
+decoder carries it, a vulnerable one does not, whatever its version string
+says. [How it works](docs/how-detection-works.md).
 
-```
-$ ./brotli-k8s-scan.sh --image registry.example/base:24.04
-Target: registry.example/base:24.04
-Verdict: PATCHED
-  [INFO  ] ospkg   dpkg: libbrotli1 1.1.0-2ubuntu0.1  -> distros backport fixes without changing the version; the library file itself is fingerprinted
-  [OK    ] binary  /usr/lib/x86_64-linux-gnu/libbrotlidec.so.1.1.0  -> contains Brotli fix
-```
+<p align="center">
+  <img src="docs/images/fingerprint.png" alt="Ubuntu 24.04 libbrotlidec.so.1.1.0 before and after the security update: both report version 1.1.0, but only the fixed one has the _ERROR_FORMAT_BLOCK_SWITCH entry (error code -17) in its decoder error table." width="100%">
+</p>
+
+Two images with the same Brotli version, scanned before and after Ubuntu's update:
+
+<p align="center">
+  <img src="docs/images/same-version.png" alt="Terminal: the image from 2026-10-20 is VULNERABLE (libbrotli1 1.1.0-2build2), the image from 2026-10-27 is PATCHED (libbrotli1 1.1.0-2ubuntu0.1); both contain libbrotlidec.so.1.1.0." width="100%">
+</p>
 
 ## Quick start
 
@@ -56,22 +61,15 @@ Useful options: `-n NAMESPACE`, `--context CTX`, `--platform linux/arm64`,
 `--deep` (also fingerprint every executable and shared library > 100 KB, to find
 statically linked copies), `--sarif`, `-o DIR`, `--dry-run`, `--print-probe`.
 
-Example (cluster):
+Example: a cluster scan. One container per image is checked, and every
+finding names the workloads to rebuild.
 
-```
-=== Summary (8 unique images) ===
-VULNERABLE       3
-REVIEW           0
-PATCHED          4
-NO_BROTLI_FOUND  1
+<p align="center">
+  <img src="docs/images/scan-cluster.png" alt="Terminal: a cluster scan of 7 unique images finds 3 vulnerable (Node.js binary, Python Brotli 1.2.0, .NET 8.0.32 native library), 3 patched and 1 without Brotli, with the workloads that use each image." width="100%">
+</p>
 
-VULNERABLE registry.example/api:1.4
-           used by: shop/ReplicaSet/api-7d9f
-           VULN: Brotli 1.2.0 (/app/venv/lib/python3/site-packages/Brotli-1.2.0.dist-info); VULN: /usr/lib/libbrotlidec.so.1.2.0; VULN: /usr/local/bin/node
-VULNERABLE registry.example/proxy:1.0
-           used by: ops/DaemonSet/proxy
-           VULN: /usr/lib/libbrotlidec.so.1.0.9
-```
+<sub>Screenshots show real scanner output against real vulnerable and fixed
+builds from the test suite; registry and workload names are examples.</sub>
 
 ## What it checks
 
