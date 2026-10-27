@@ -1,5 +1,5 @@
-# Test helpers for tests/run-tests.sh (YARA rule check, SARIF schema check),
-# installed by tests/build-fixtures.sh with --require-hashes.
+# Test helpers for tests/run-tests.sh (YARA rule check, SARIF schema check,
+# fuzz tests), installed by tests/build-fixtures.sh with --require-hashes.
 # Regenerate: pip-compile --generate-hashes --allow-unsafe --strip-extras --annotation-style line
 #   from: yara-python==4.5.4, jsonschema==4.26.0, typing-extensions (Python < 3.13)
 
@@ -216,3 +216,10 @@ yara-python==4.5.4 \
     --hash=sha256:fd84af5b6da3429236b61f3ad8760fdc739d0e1d6a08b8f3d90cd375e71594df \
     --hash=sha256:fe8ad189843c729eae74be3b8447a4753fac2cebe705e5e2a7280badfcc7e3b4
     # via -r /tmp/req.in
+
+# Fuzzer for tests/fuzz/fuzz_scanner.py: added by hand (pip-compile keeps no
+# platform markers). Wheels exist for x86_64 only; elsewhere the fuzz tests skip.
+atheris==3.1.0 ; platform_machine == "x86_64" and python_version >= "3.12" and python_version < "3.15" \
+    --hash=sha256:ec5e11f21a4c197fe91f7aea2b2de88e623c73a21fc07b105ac6329a1588457b \
+    --hash=sha256:f8a9f51ce8369026e8eb7b7174835e8c4c85a1a6db5d9add36c15100779d2a39 \
+    --hash=sha256:315a0b5c819852b1ffe1ca72efc389c7724881f2c33e4aacb8c6bcec49bd5011

@@ -124,30 +124,73 @@ paint() {  # verdict or state -> coloured text
 # ---------------------------------------------------------------------------
 read -r -d '' PROBE <<'PROBE_EOF'
 R="$1"; X="${2:-1}"; D="${3:-0}"
+export LC_ALL=C
 T=$(printf '\t')
 S="${R:-/}"
+# Hostile names and tool output must not be able to forge or shift a record:
+# names containing control characters (tab, newline, ...) are counted and
+# reported, never parsed; every other printed value is cleaned first.
+CTL=$(printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177')
+clean() { printf '%s' "$1" | tr -d '\000-\037\177'; }
+oddname() { case "$1" in *["$CTL"]*) return 0 ;; esac; return 1; }
+# Paths from find: only complete paths below the scanned root. A name that
+# contains a newline arrives in pieces; the pieces do not start with the root.
+ours() { case "$1" in "$S"*) oddname "$1" && return 1; return 0 ;; esac; return 1; }
+# Every file the probe reads must lie inside the scanned root: an image must
+# not make us read host files through a symlink (etc/os-release -> /etc/...).
+RR=""; [ -n "$R" ] && RR=$(cd "$R" 2>/dev/null && pwd -P)
+inside() {  # $1 is a regular file, not a symlink, in a directory below the root
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  [ -n "$R" ] || return 0
+  case "$(cd "${1%/*}/" 2>/dev/null && pwd -P)/" in "$RR"/*) return 0 ;; esac
+  return 1
+}
+resolve() {  # prints the file to read for $1: symlinks resolved as inside the image
+  p=$1; i=0
+  while [ -L "$p" ]; do
+    i=$((i + 1)); [ "$i" -le 8 ] || return 1
+    l=$(readlink "$p" 2>/dev/null) || return 1
+    case "$l" in /*) p="$R$l" ;; *) p="${p%/*}/$l" ;; esac
+  done
+  inside "$p" && printf '%s' "$p"
+}
+# Records go out with printf: some shells' echo turns \n or \t in a name or a
+# version string into a real newline or tab, which would forge a record.
+rec() { printf '%s\n' "$1"; }
 echo "BEGIN"
-f="$R/etc/os-release"; [ -r "$f" ] || f="$R/usr/lib/os-release"
-[ -r "$f" ] && echo "OS${T}$(sed -n 's/^PRETTY_NAME=//p' "$f" | tr -d '"')"
+f=$(resolve "$R/etc/os-release") || f=$(resolve "$R/usr/lib/os-release") || f=""
+[ -n "$f" ] && rec "OS${T}$(clean "$(sed -n 's/^PRETTY_NAME=//p' "$f" | head -n 1 | tr -d '"')")"
 
 # --- runtimes (only when executing inside the container) ---
 if [ "$X" = 1 ]; then
-  for c in node nodejs; do
-    p=$(command -v "$c" 2>/dev/null) && [ -n "$p" ] && { r=$(readlink -f "$p" 2>/dev/null || echo "$p"); echo "NODE${T}$("$p" -v 2>/dev/null | head -n 1)${T}${r#$R}"; }
-  done
-  p=$(command -v bun 2>/dev/null) && [ -n "$p" ] && { r=$(readlink -f "$p" 2>/dev/null || echo "$p"); echo "BUN${T}$("$p" --version 2>/dev/null | head -n 1)${T}${r#$R}"; }
-  p=$(command -v envoy 2>/dev/null) && [ -n "$p" ] && { r=$(readlink -f "$p" 2>/dev/null || echo "$p"); echo "ENVOY${T}$("$p" --version 2>/dev/null | sed -n 's|.*/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[/-].*|\1|p' | head -n 1)${T}${r#$R}"; }
-  p=$(command -v dotnet 2>/dev/null) && [ -n "$p" ] && "$p" --list-runtimes 2>/dev/null | while IFS= read -r l; do echo "DOTNET${T}$l"; done
-  p=$(command -v curl 2>/dev/null) && [ -n "$p" ] && echo "CURL${T}$("$p" -V 2>/dev/null | head -n 1)"
-  command -v rpm >/dev/null 2>&1 && rpm -qa 2>/dev/null | grep -i brotli | while IFS= read -r l; do echo "OSPKG${T}rpm${T}$l"; done
+  rt() {  # $1=record type $2=command
+    p=$(command -v "$2" 2>/dev/null) && [ -n "$p" ] || return 0
+    r=$(readlink -f "$p" 2>/dev/null || printf '%s' "$p")
+    case "$1" in
+      NODE)  v=$("$p" -v 2>/dev/null | head -n 1) ;;
+      ENVOY) v=$("$p" --version 2>/dev/null | sed -n 's|.*/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[/-].*|\1|p' | head -n 1) ;;
+      *)     v=$("$p" --version 2>/dev/null | head -n 1) ;;
+    esac
+    rec "$1${T}$(clean "$v")${T}$(clean "${r#$R}")"
+  }
+  rt NODE node; rt NODE nodejs; rt BUN bun; rt ENVOY envoy
+  p=$(command -v dotnet 2>/dev/null) && [ -n "$p" ] && "$p" --list-runtimes 2>/dev/null | while IFS= read -r l; do rec "DOTNET${T}$(clean "$l")"; done
+  p=$(command -v curl 2>/dev/null) && [ -n "$p" ] && rec "CURL${T}$(clean "$("$p" -V 2>/dev/null | head -n 1)")"
+  command -v rpm >/dev/null 2>&1 && rpm -qa 2>/dev/null | grep -i brotli | while IFS= read -r l; do rec "OSPKG${T}rpm${T}$(clean "$l")"; done
 fi
 
 # --- OS packages from package DBs (works in both modes) ---
-if [ -r "$R/var/lib/dpkg/status" ]; then
-  awk -v T="$T" '/^Package: /{p=$2} /^Version: /{v=$2} /^$/{if(p ~ /brotli/) print "OSPKG" T "dpkg" T p " " v; p=""; v=""} END{if(p ~ /brotli/) print "OSPKG" T "dpkg" T p " " v}' "$R/var/lib/dpkg/status"
+if f=$(resolve "$R/var/lib/dpkg/status"); then
+  awk -v T="$T" 'function c(s) { gsub(/[[:cntrl:]]/, "", s); return s }
+    /^Package: /{p=$2} /^Version: /{v=$2}
+    /^$/{if(p ~ /brotli/) print "OSPKG" T "dpkg" T c(p) " " c(v); p=""; v=""}
+    END{if(p ~ /brotli/) print "OSPKG" T "dpkg" T c(p) " " c(v)}' "$f"
 fi
-if [ -r "$R/lib/apk/db/installed" ]; then
-  awk -v T="$T" '/^P:/{p=substr($0,3)} /^V:/{v=substr($0,3)} /^$/{if(p ~ /brotli/) print "OSPKG" T "apk" T p " " v; p=""; v=""} END{if(p ~ /brotli/) print "OSPKG" T "apk" T p " " v}' "$R/lib/apk/db/installed"
+if f=$(resolve "$R/lib/apk/db/installed"); then
+  awk -v T="$T" 'function c(s) { gsub(/[[:cntrl:]]/, "", s); return s }
+    /^P:/{p=substr($0,3)} /^V:/{v=substr($0,3)}
+    /^$/{if(p ~ /brotli/) print "OSPKG" T "apk" T c(p) " " c(v); p=""; v=""}
+    END{if(p ~ /brotli/) print "OSPKG" T "apk" T c(p) " " c(v)}' "$f"
 fi
 
 # --- Python packages (any venv / site-packages on the filesystem) ---
@@ -155,9 +198,10 @@ find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune
   \( -iname 'brotli-*.dist-info' -o -iname 'brotli-*.egg-info' -o -iname 'brotlicffi-*.dist-info' \
      -o -iname 'brotlicffi-*.egg-info' -o -iname 'brotlipy-*.dist-info' -o -iname 'brotlipy-*.egg-info' \) -print 2>/dev/null |
 while IFS= read -r d; do
+  ours "$d" && [ -d "$d" ] || continue
   b=$(basename "$d"); b=${b%.dist-info}; b=${b%.egg-info}
   n=${b%%-*}; v=${b#*-}; v=${v%%-py*}
-  echo "PY${T}$n${T}$v${T}${d#$R}"
+  rec "PY${T}$n${T}$v${T}${d#$R}"
 done
 
 # --- .NET: runtime version from *.deps.json (shared framework and self-contained
@@ -165,19 +209,19 @@ done
 #     ("bundled") or uses the system libbrotli ("linked"), or is absent ---
 find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f -name '*.deps.json' -print 2>/dev/null |
 while IFS= read -r j; do
+  ours "$j" && inside "$j" || continue
   v=$(grep -o 'Microsoft\.NETCore\.App\.Runtime\.[A-Za-z0-9_.-]*/[0-9][0-9.]*' "$j" 2>/dev/null | head -n 1 | sed 's|.*/||')
   [ -n "$v" ] || continue
-  l="$(dirname "$j")/libSystem.IO.Compression.Native.so"
-  if [ ! -f "$l" ]; then ls=absent
-  elif LC_ALL=C tr -c ' -~' '\n' < "$l" 2>/dev/null | grep -q -F 'timedownlifeleftback'; then ls=bundled
+  if ! l=$(resolve "$(dirname "$j")/libSystem.IO.Compression.Native.so"); then ls=absent
+  elif tr -c ' -~' '\n' < "$l" 2>/dev/null | grep -q -F 'timedownlifeleftback'; then ls=bundled
   else ls=linked; fi
-  echo "DOTNETRT${T}$v${T}${j#$R}${T}$ls"
+  rec "DOTNETRT${T}$v${T}${j#$R}${T}$ls"
 done
 
 # --- Java: brotli4j bundles the C library inside jars (cannot fingerprint) ---
 find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f \
   \( -iname 'brotli4j*.jar' -o -iname 'native-linux-*.jar' -o -iname 'jvmbrotli*.jar' \) -print 2>/dev/null |
-while IFS= read -r j; do echo "JAR${T}${j#$R}"; done
+while IFS= read -r j; do ours "$j" && [ -f "$j" ] && rec "JAR${T}${j#$R}"; done
 
 # --- Binary fingerprinting ---
 classify() {
@@ -186,8 +230,8 @@ classify() {
   # Turn every non-printable byte into a newline first: binaries contain NUL
   # bytes, and BusyBox grep (Alpine) stops reading a line at the first NUL.
   # One pass collects every relevant string; the checks below run on that.
-  m=$(LC_ALL=C tr -c ' -~' '\n' < "$f" 2>/dev/null |
-      LC_ALL=C grep -F -e 'timedownlifeleftback' -e 'BrotliDecoder' -e 'EXUBERANT_NIBBLE' -e 'BLOCK_SWITCH' 2>/dev/null)
+  m=$(tr -c ' -~' '\n' < "$f" 2>/dev/null |
+      grep -F -e 'timedownlifeleftback' -e 'BrotliDecoder' -e 'EXUBERANT_NIBBLE' -e 'BLOCK_SWITCH' 2>/dev/null)
   [ -n "$m" ] || return 0
   dict=0; case "$m" in *timedownlifeleftback*) dict=1 ;; esac   # Brotli code compiled in
   case "$m" in
@@ -195,15 +239,15 @@ classify() {
     *_ERROR_FORMAT_EXUBERANT_NIBBLE*) s=VULNERABLE ;;
     *)
       # 1.0.x error table stores bare names ("EXUBERANT_NIBBLE", "BLOCK_SWITCH")
-      if printf '%s\n' "$m" | LC_ALL=C grep -q -x 'EXUBERANT_NIBBLE'; then
-        if printf '%s\n' "$m" | LC_ALL=C grep -q -x 'BLOCK_SWITCH'; then s=PATCHED_10X; else s=VULNERABLE_10X; fi
+      if printf '%s\n' "$m" | grep -q -x 'EXUBERANT_NIBBLE'; then
+        if printf '%s\n' "$m" | grep -q -x 'BLOCK_SWITCH'; then s=PATCHED_10X; else s=VULNERABLE_10X; fi
       elif [ "$dict" = 1 ]; then
         s=UNKNOWN  # Brotli code present but no error table (stripped / LTO): version unknown
       else
         return 0   # only imports libbrotli symbols; the shared library is checked on its own
       fi ;;
   esac
-  echo "BIN${T}$s${T}${f#$R}"
+  rec "BIN${T}$s${T}${f#$R}"
 }
 {
   find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f \
@@ -215,7 +259,11 @@ classify() {
     find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f -size +100k \
       \( -perm -100 -o -name '*.so' -o -name '*.so.*' \) -print 2>/dev/null
   fi
-} | sort -u | while IFS= read -r f; do classify "$f"; done
+} | sort -u | while IFS= read -r f; do ours "$f" && inside "$f" && classify "$f"; done
+
+# --- names with control characters: never parsed above, so report them ---
+n=$(find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o \( -type f -o -type d \) -name "*[$CTL]*" -print0 2>/dev/null | tr -cd '\000' | wc -c | tr -d ' ')
+[ "${n:-0}" -gt 0 ] && rec "ODDNAMES${T}$n"
 echo "END"
 PROBE_EOF
 
@@ -227,7 +275,7 @@ PROBE_EOF
 # states: VULN, REVIEW, OK, INFO
 # ---------------------------------------------------------------------------
 evaluate() {
-  awk -F'\t' '
+  LC_ALL=C awk -F'\t' '
   function vcmp(a, b,   n, m, i, x, y, ax, bx) {
     sub(/^v/, "", a); sub(/^v/, "", b)
     n = split(a, ax, /[^0-9]+/); m = split(b, bx, /[^0-9]+/)
@@ -271,13 +319,20 @@ evaluate() {
     return ""
   }
   function add(state, kind, what, note, path) { nf++; FS_[nf] = state; FK[nf] = kind; FW[nf] = what; FN[nf] = note; FP[nf] = path }
+  function rank(s) { return s ~ /^VULNERABLE/ ? 3 : (s ~ /^PATCHED/ ? 1 : 2) }
+  # In cluster mode the probe runs on the container'"'"'s own shell and tools, which
+  # can print anything: drop control characters first (terminal escapes, CR;
+  # also C1 controls in UTF-8, which some terminals act on).
+  { for (i = 1; i <= NF; i++) { gsub(/[[:cntrl:]]/, "", $i); gsub(/\302[\200-\237]/, "", $i) } }
   $1 == "BEGIN" { began = 1 }
   $1 == "END"   { ended = 1 }
   $1 == "EXECFAIL" { add("REVIEW", "exec", $2, "could not run the probe (no shell / distroless?). Re-run with --no-exec, or scan the image with --image", "") }
   $1 == "PULLFAIL" { add("REVIEW", "image", $2, "could not pull/unpack the image (registry login? platform?)", "") }
   $1 == "OS"    { os = $2 }
   $1 == "NODE" || $1 == "BUN" || $1 == "ENVOY" { nr++; RK[nr] = tolower($1); RV[nr] = $2; RP[nr] = $3 }
-  $1 == "BIN"   { bin[$3] = $2; binorder[++nb] = $3 }
+  # the same path twice (it should not happen): the worse state wins
+  $1 == "BIN"   { if (!($3 in bin)) binorder[++nb] = $3; else if (rank(bin[$3]) >= rank($2)) next; bin[$3] = $2 }
+  $1 == "ODDNAMES" { add("REVIEW", "names", $2 " file name(s) with control characters", "not scanned (tabs or newlines in names can mislead scanners); list them with: find ROOT -xdev -name '"'"'*[[:cntrl:]]*'"'"'", "") }
   $1 == "DOTNETRT" { nd++; DV[nd] = $2; DP[nd] = $3; DL[nd] = $4; d = $3; sub(/\/[^\/]*$/, "", d); DD[nd] = d; dver[d] = $2 }
   $1 == "PY" {
     n = tolower($2); v = $3

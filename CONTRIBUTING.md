@@ -30,7 +30,17 @@ tests/run-tests.sh        # offline: re-runs itself in a network namespace witho
   bytes and BusyBox `grep` stops at them, so strings are extracted with
   `tr -c ' -~' '\n'` first. In image and `--rootfs` mode nothing from the
   scanned filesystem may be executed.
-- Lint: `shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fake-*/*`.
+- Lint: `shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh tests/fake-*/*`.
+- Fuzz tests (x86-64; atheris has no arm64 wheels): `tests/run-tests.sh` runs
+  200 inputs per target with a fixed seed; `tests/fuzz/run-fuzz.sh [seconds]`
+  runs longer (CI job `fuzz`). A failure prints the input as `Base64: ...`;
+  replay it with `python3 -I tests/fuzz/fuzz_scanner.py tests/.cache/pylib <target> <file>`.
+  The `evaluator` target compares the scanner with a model of the verdict
+  rules in the harness, so a rule change needs the same change there.
+- Everything the probe reads from an image is hostile input: no `echo` of
+  file names or versions (some shells turn `\n` into a newline), skip names
+  with control characters, and read no file through a symlink that leaves
+  the scanned root (see SECURITY.md, "Hostile images").
 - End-to-end: `tests/e2e-kind.sh` runs against a real kind cluster (CI job
   `e2e (kind)`). Needs docker, kind, kubectl, crane and a static busybox.
   Without kind (e.g. no access to kind's node image), `E2E_PHASES=images`
@@ -65,6 +75,8 @@ vendor advisory in the commit message:
 
 - `brotli-k8s-scan.sh`: `rt_state()` and `fixhint()` in the evaluator, the
   Python rules, the SARIF help text
+- `tests/fuzz/fuzz_scanner.py`: `FIXED`, `ENVOY_FIXED`, `BUN_FIXED`, `PY_FIXED`
+  (the fuzz test fails until both agree)
 - `README.md` (What it checks), `docs/how-detection-works.md`, `CHANGELOG.md`
 - `yara/brotli_cve_2026_111497.yar` only if the fingerprint itself changes
 

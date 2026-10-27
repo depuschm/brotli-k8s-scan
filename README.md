@@ -96,7 +96,7 @@ from other servers (`fetch()`, Python `requests` / `httpx` / `aiohttp` /
 | Verdict | Meaning |
 |---|---|
 | `VULNERABLE` | at least one vulnerable runtime, package or embedded decoder |
-| `REVIEW` | Brotli found but its patch state is unknown: stripped binary, a Java jar that may bundle it, no shell for `exec`, or the image could not be pulled |
+| `REVIEW` | Brotli found but its patch state is unknown: stripped binary, a Java jar that may bundle it, no shell for `exec`, the image could not be pulled, or file names with control characters that were not scanned |
 | `PATCHED` | Brotli found and every copy contains the fix |
 | `NO_BROTLI_FOUND` | nothing found among the usual suspects (add `--deep` to be thorough) |
 
@@ -152,7 +152,9 @@ error table.
    dpkg/apk/rpm databases) and fingerprints the usual binaries: `node`, `bun`,
    `envoy`, `nginx`, `curl`, `libbrotli*`, Python extension modules,
    `libSystem.IO.Compression.Native.so`, `*.node` addons, ... (`--deep`: every
-   executable and shared library > 100 KB).
+   executable and shared library > 100 KB). File names with control
+   characters are counted, not parsed, and in image scans no file outside the
+   image is read, also not through symlinks ([SECURITY.md](SECURITY.md#hostile-images)).
 3. Results are evaluated on your machine and written to the reports.
 
 Details and the evidence behind the fingerprint: [docs/how-detection-works.md](docs/how-detection-works.md).
@@ -164,10 +166,10 @@ A scanner that runs inside your production pods should be easy to check:
 | What | How |
 |---|---|
 | The file is the one this repository built | `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan` (signed build provenance from GitHub Actions; releases after v0.3.0 also attach it as `.sigstore.json` / `.intoto.jsonl`) |
-| Exactly what runs inside your containers | `./brotli-k8s-scan.sh --print-probe` (about 100 lines of POSIX sh; a test checks it is byte-identical to what is executed) |
+| Exactly what runs inside your containers | `./brotli-k8s-scan.sh --print-probe` (about 150 lines of POSIX sh; a test checks it is byte-identical to what is executed) |
 | Which pods / images it would touch | `./brotli-k8s-scan.sh --dry-run` (with `--no-exec`: which images it would pull) |
 | It needs no network | `unshare -rn ./brotli-k8s-scan.sh --rootfs /` works without any network access |
-| The detection is correct | every change is tested in [GitHub Actions](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml) on x86-64 and arm64 against real vulnerable and fixed builds (see [Tests](#tests)) |
+| The detection is correct | every change is tested in [GitHub Actions](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml) on x86-64 and arm64 against real vulnerable and fixed builds, and fuzz-tested with hostile file trees (see [Tests](#tests)) |
 
 Found a wrong verdict or a security problem? See [SECURITY.md](SECURITY.md).
 
@@ -194,6 +196,9 @@ Found a wrong verdict or a security problem? See [SECURITY.md](SECURITY.md).
   scaled-to-zero workloads: scan their images with `--image`.
 - .NET single-file apps that embed the native library inside the executable
   are only found with `--deep`, and then as `REVIEW`.
+- Default cluster mode runs the probe with the container's own shell and
+  tools, so a malicious image can fake their output. Scan images you do not
+  trust with `--no-exec` or `--image` ([SECURITY.md](SECURITY.md#hostile-images)).
 
 This tool contains no exploit code and sends nothing anywhere except through
 your own `kubectl` / registry tools.
@@ -237,6 +242,20 @@ validates `report.sarif` against the SARIF 2.1.0 schema and checks the YARA
 rules against the same binaries. In GitHub Actions it runs on x86-64 and arm64
 with every fixture mandatory, so a skipped download fails the build instead of
 silently reducing coverage.
+
+Fuzz tests ([`tests/fuzz/`](tests/fuzz/fuzz_scanner.py), with
+[atheris](https://github.com/google/atheris)) feed the scanner random input:
+
+- random probe output (also garbage, control characters, duplicate records)
+  is checked against a separate model of the verdict rules;
+- random file trees with hostile names (tabs, newlines, backslashes, escape
+  sequences) and symlinks out of the tree are scanned with `sh`, `dash`,
+  `bash` and BusyBox: the planted vulnerable `node` must always be found,
+  every reported file must exist inside the tree, and no candidate file may
+  be missed.
+
+The suite runs a short session; the CI job `fuzz` runs 2 minutes per target
+on every change and 15 minutes in the weekly run (`tests/fuzz/run-fuzz.sh`).
 
 ## Contributing
 
