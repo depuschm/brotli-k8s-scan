@@ -1,25 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-27)
 
+Scanner:
+- Envoy: official Envoy builds keep no decoder error table, so the version
+  decides (`envoy --version` in the default cluster mode). Without `exec`
+  (image and `--no-exec` scans) Envoy is now reported as `REVIEW` with an
+  Envoy-specific explanation instead of a generic "stripped binary" note.
+  README: the Envoy and Istio rows are corrected accordingly (Istio: not tested).
+- Exec failures now report the real reason (e.g. no `sh` in the image), also
+  when the container runtime prints it on standard output.
+
+Evidence and trust:
+- Tested against the official Bun 1.4.3 / 1.4.4 and Envoy 1.36.11 / 1.36.12
+  release binaries; Bun is decided by its fingerprint alone.
+- End-to-end test on a real Kubernetes cluster (kind) in CI: real registry,
+  real `kubectl exec` (BusyBox in the pods, real `node -v`), `--no-exec` with
+  real `crane` pulls by digest, `--image` with real `docker`.
 - Releases attach the signed SLSA provenance as files
   (`brotli-k8s-scan.sigstore.json`, `brotli-k8s-scan.intoto.jsonl`) for
   offline verification.
 - CodeQL static analysis of workflows, Python and JavaScript on every change.
 - Test helpers (yara-python, jsonschema) are installed with exact versions and
   verified hashes (`tests/requirements.txt`).
-
-- Tested against the official Bun 1.4.3 / 1.4.4 and Envoy 1.36.11 / 1.36.12
-  release binaries. Bun: the fingerprint decides on its own. Envoy builds keep
-  no decoder error table, so `envoy --version` (default cluster mode) decides;
-  without `exec` Envoy is now reported as `REVIEW` with an Envoy-specific
-  explanation. README: corrected the Envoy and Istio rows accordingly.
-- End-to-end test on a real Kubernetes cluster (kind) in CI: real registry,
-  real `kubectl exec` (BusyBox in the pods, real `node -v`), `--no-exec` with
-  real `crane` pulls by digest, `--image` with real `docker`.
-- Exec failures now report the real reason (e.g. no `sh` in the image), also
-  when the runtime prints it on standard output.
-- Upkeep: Dependabot for the pinned GitHub Actions, a weekly test run without
+- Upkeep: Dependabot (GitHub Actions, test helpers), a weekly test run without
   the download cache, OpenSSF Scorecard (workflow and badge).
 
 ## 0.3.0 (2026-10-27)
