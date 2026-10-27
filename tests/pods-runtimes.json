@@ -1,0 +1,80 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "namespace": "edge",
+        "name": "exec-envoyold-1"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "main",
+            "image": "registry.test/envoy:1.36.11",
+            "imageID": "registry.test/envoy@sha256:e1",
+            "state": {
+              "running": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "edge",
+        "name": "exec-envoyfixed-1"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "main",
+            "image": "registry.test/envoy:1.36.12",
+            "imageID": "registry.test/envoy@sha256:e2",
+            "state": {
+              "running": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "edge",
+        "name": "exec-bunold-1"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "main",
+            "image": "registry.test/bun:1.4.3",
+            "imageID": "registry.test/bun@sha256:b1",
+            "state": {
+              "running": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "edge",
+        "name": "exec-bunfixed-1"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "main",
+            "image": "registry.test/bun:1.4.4",
+            "imageID": "registry.test/bun@sha256:b2",
+            "state": {
+              "running": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

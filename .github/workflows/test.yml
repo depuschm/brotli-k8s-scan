@@ -64,6 +64,7 @@ jobs:
             tests/.cache/node-*
             tests/.cache/ubuntu
             tests/.cache/msdotnet
+            tests/.cache/runtimes
             tests/.cache/pylib
             tests/.cache/sarif-schema-2.1.0.json
           key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh') }}

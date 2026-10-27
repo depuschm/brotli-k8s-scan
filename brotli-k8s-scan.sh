@@ -315,6 +315,7 @@ evaluate() {
       else if (s == "VULNERABLE_10X") add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.0.x without fix)" (dv != "" ? "; " fixhint("dotnet") : ""), p)
       else if (dv != "" && rt_state("dotnet", dv) == "OK") add("OK", "dotnet", ".NET " dv, "runtime version contains the fix", p)
       else if (dv != "")              add("VULN", "dotnet", ".NET " dv, fixhint("dotnet"), p)
+      else if (p ~ /(^|\/)envoy$/)    add("REVIEW", "envoy", p, "Envoy builds keep no Brotli error table, so its version decides: scan the running pod in the default cluster mode, or run envoy --version (fixed: 1.36.12 / 1.37.8 / 1.38.6 / 1.39.3 / 1.40.0)", p)
       else                            add("REVIEW", "binary", p, "contains Brotli decoder, version not detectable (stripped). Ask vendor / rebuild", p)
     }
     for (i = 1; i <= nd; i++) {

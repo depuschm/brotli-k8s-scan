@@ -66,7 +66,7 @@ LC_ALL=C grep -c _ERROR_FORMAT_BLOCK_SWITCH "$f"       # 0: vulnerable, >0: fixe
 | Node.js 22.23.3 / 22.23.4 (official binaries) | Brotli 1.1.0 / 1.1.0 | vulnerable / **fixed** |
 | Python `Brotli` 1.2.0 / 1.2.1 wheels | 1.2.0 / 1.2.1 | vulnerable / fixed |
 | Python `brotlicffi` 1.2.0.1 / 1.2.1.0 wheels | 1.2.0.1 / 1.2.1.0 | vulnerable / fixed |
-| Bun 1.4.4 (official binary) | 1.4.4 | fixed |
+| Bun 1.4.3 / 1.4.4 (official binaries) | 1.4.3 / 1.4.4 | vulnerable / fixed |
 | Pillow wheel's bundled `libbrotlidec` | 1.2.0 | vulnerable |
 | Ubuntu .NET 8.0.32 `libSystem.IO.Compression.Native.so` (bundled Brotli 1.0.x) | .NET 8.0.32 | vulnerable |
 
@@ -86,6 +86,16 @@ same way:
   or, for self-contained apps, from the app's `*.deps.json`. Microsoft fixed
   .NET in 8.0.33, 9.0.22 and 10.0.14. The official Microsoft builds before and
   after the fix are tested in CI.
+
+## Where the fingerprint cannot decide: Envoy
+
+Official Envoy builds (tested: 1.36.11 and 1.36.12) contain the Brotli code
+and its static dictionary, but no decoder error table, so the vulnerable and
+the fixed build look the same. For Envoy the version decides: in the default
+cluster mode the scanner runs `envoy --version` inside the pod; image and
+`--no-exec` scans report Envoy as `REVIEW`. Reading the version text out of
+the binary without running it was considered and rejected: nothing stable
+marks which string is Envoy's own version.
 
 ## Limits
 

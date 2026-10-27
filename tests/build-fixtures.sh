@@ -133,6 +133,25 @@ for v in $MS_VERSIONS; do
 done
 if [ "$ms_ok" = 1 ]; then MSDN_OK=1; else optional_failed "Microsoft .NET runtime downloads not reachable"; fi
 
+echo "== official Envoy 1.36.11 / 1.36.12 and Bun 1.4.3 / 1.4.4 binaries (before / after the fix)"
+RT_OK=0
+case "$NODE_ARCH" in x64) EARCH=x86_64; BARCH=x64 ;; arm64) EARCH=aarch_64; BARCH=aarch64 ;; esac
+mkdir -p runtimes
+rt_ok=1
+for v in 1.36.11 1.36.12; do
+  [ -s "runtimes/envoy-$v" ] || curl -fsSL -o "runtimes/envoy-$v" \
+    "https://github.com/envoyproxy/envoy/releases/download/v$v/envoy-$v-linux-$EARCH" 2>/dev/null || { rm -f "runtimes/envoy-$v"; rt_ok=0; }
+done
+for v in 1.4.3 1.4.4; do
+  if [ ! -s "runtimes/bun-$v" ]; then
+    if curl -fsSL -o "runtimes/bun-$v.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$v/bun-linux-$BARCH.zip" 2>/dev/null; then
+      rm -rf "runtimes/bun-$v.d" && python3 -m zipfile -e "runtimes/bun-$v.zip" "runtimes/bun-$v.d" &&
+        mv "$(find "runtimes/bun-$v.d" -type f -name bun | head -n 1)" "runtimes/bun-$v" && rm -rf "runtimes/bun-$v.d" "runtimes/bun-$v.zip"
+    else rm -f "runtimes/bun-$v.zip"; rt_ok=0; fi
+  fi
+done
+if [ "$rt_ok" = 1 ]; then chmod +x runtimes/*; RT_OK=1; else optional_failed "Envoy/Bun release downloads failed"; fi
+
 echo "== test helpers: yara-python, jsonschema, SARIF 2.1.0 schema"
 [ -f pylib/.ok ] || { python3 -m pip install -q --target pylib yara-python jsonschema && touch pylib/.ok; } ||
   optional_failed "pip install of yara-python/jsonschema failed"
@@ -207,6 +226,15 @@ if [ "$MSDN_OK" = 1 ]; then
   for v in $MS_VERSIONS; do
     mkdir -p "$FX/msdotnet-$v/usr/share/dotnet"
     tar -xzf "msdotnet/dotnet-runtime-$v.tar.gz" -C "$FX/msdotnet-$v/usr/share/dotnet"
+  done
+fi
+
+# Real Envoy and Bun binaries. Fixture names have no "-": the fake kubectl
+# maps pod names like exec-envoyold-1 to the fixture "envoyold".
+if [ "$RT_OK" = 1 ]; then
+  for k in envoyold:envoy-1.36.11 envoyfixed:envoy-1.36.12 bunold:bun-1.4.3 bunfixed:bun-1.4.4; do
+    fx=${k%%:*}; f=${k#*:}
+    mkdir -p "$FX/$fx/usr/local/bin"; cp "runtimes/$f" "$FX/$fx/usr/local/bin/${f%%-*}"
   done
 fi
 
