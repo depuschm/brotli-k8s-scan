@@ -3,6 +3,7 @@
 </p>
 
 [![tests](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml/badge.svg)](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/depuschm/brotli-k8s-scan/badge)](https://scorecard.dev/viewer/?uri=github.com/depuschm/brotli-k8s-scan)
 ![CVE-2026-111497](https://img.shields.io/badge/CVE--2026--111497-critical-red)
 ![license MIT](https://img.shields.io/badge/license-MIT-blue)
 ![dependencies: bash](https://img.shields.io/badge/dependencies-bash%20%2B%20coreutils-informational)

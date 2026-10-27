@@ -63,6 +63,16 @@ vendor advisory in the commit message:
 - `README.md` (What it checks), `docs/how-detection-works.md`, `CHANGELOG.md`
 - `yara/brotli_cve_2026_111497.yar` only if the fingerprint itself changes
 
+## Upkeep (automatic)
+
+- **Dependabot** opens one grouped pull request a week when a pinned GitHub
+  Action has a new release; the tests run on it like on any change.
+- **Weekly test run** (Mondays) builds every fixture *without* the cache, so a
+  dead download link (Ubuntu removes superseded packages) shows up as a
+  failed run and an email, not during a release.
+- **OpenSSF Scorecard** rates the repository's security practices; results in
+  the Security tab and on the README badge.
+
 ## Releasing
 
 1. Bump `VERSION` in `brotli-k8s-scan.sh` and add a `CHANGELOG.md` entry.

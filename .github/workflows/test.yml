@@ -11,6 +11,10 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+  # weekly, WITHOUT the download cache: catches dead download links (Ubuntu
+  # removes superseded packages) and changed upstream files early
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
@@ -54,6 +58,7 @@ jobs:
           busybox --help | head -n 1
 
       - name: Cache downloads and builds
+        if: github.event_name != 'schedule'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

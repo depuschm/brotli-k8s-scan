@@ -7,6 +7,8 @@
   no decoder error table, so `envoy --version` (default cluster mode) decides;
   without `exec` Envoy is now reported as `REVIEW` with an Envoy-specific
   explanation. README: corrected the Envoy and Istio rows accordingly.
+- Upkeep: Dependabot for the pinned GitHub Actions, a weekly test run without
+  the download cache, OpenSSF Scorecard (workflow and badge).
 
 ## 0.3.0 (2026-10-27)
 
