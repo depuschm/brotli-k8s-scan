@@ -1,2 +1,3 @@
 tests/.cache/
 brotli-scan-*/
+__pycache__/
