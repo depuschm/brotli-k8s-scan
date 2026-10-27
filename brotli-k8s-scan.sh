@@ -32,6 +32,8 @@
 #   --deep                fingerprint every executable / .so > 100 KB, not just the
 #                         usual suspects (finds statically linked copies; slower)
 #   --sarif               also write report.sarif (GitHub code scanning etc.)
+#   --dry-run             only list what would be scanned (pods/images); no exec, no pull
+#   --print-probe         print the exact shell code that runs in containers, then exit
 #   -o, --out DIR         output directory (default: ./brotli-scan-<timestamp>)
 #   --timeout SEC         per-container exec timeout (default 180, needs `timeout`)
 #   --version, -h/--help
@@ -48,10 +50,11 @@
 # https://github.com/depuschm/brotli-k8s-scan  (MIT)
 
 set -u
-VERSION="0.2.0"
+VERSION="0.3.0"
 REPO_URL="https://github.com/depuschm/brotli-k8s-scan"
 
 NS=""; CTX=""; DEEP=0; OUT=""; TMO=180; ROOTFS=""; NOEXEC=0; SARIF=0; PLATFORM=""; EVAL_ONLY=0
+PRINT_PROBE=0; DRY_RUN=0
 IMAGES=(); IMAGES_FROM=""
 
 die() { echo "error: $*" >&2; exit 2; }
@@ -70,6 +73,8 @@ while [ $# -gt 0 ]; do
     --images-from) IMAGES_FROM="${2:-}"; shift 2 ;;
     --platform) PLATFORM="${2:-}"; shift 2 ;;
     --sarif) SARIF=1; shift ;;
+    --print-probe) PRINT_PROBE=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     --version) echo "brotli-k8s-scan $VERSION"; exit 0 ;;
     --evaluate-stdin) EVAL_ONLY=1; shift ;;   # internal: evaluate probe output from stdin (tests)
     -h|--help) usage 0 ;;
@@ -89,7 +94,7 @@ if [ -n "$ROOTFS" ]; then MODE=rootfs
 elif [ "${#IMAGES[@]}" -gt 0 ]; then MODE=image
 else MODE=cluster; fi
 
-if [ "$EVAL_ONLY" = 0 ]; then
+if [ "$EVAL_ONLY" = 0 ] && [ "$PRINT_PROBE" = 0 ]; then
   [ -n "$OUT" ] || OUT="./brotli-scan-$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$OUT/raw" || die "cannot create $OUT"
 fi
@@ -155,6 +160,20 @@ while IFS= read -r d; do
   echo "PY${T}$n${T}$v${T}${d#$R}"
 done
 
+# --- .NET: runtime version from *.deps.json (shared framework and self-contained
+#     apps), and whether the Brotli native library next to it bundles Brotli
+#     ("bundled") or uses the system libbrotli ("linked"), or is absent ---
+find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f -name '*.deps.json' -print 2>/dev/null |
+while IFS= read -r j; do
+  v=$(grep -o 'Microsoft\.NETCore\.App\.Runtime\.[A-Za-z0-9_.-]*/[0-9][0-9.]*' "$j" 2>/dev/null | head -n 1 | sed 's|.*/||')
+  [ -n "$v" ] || continue
+  l="$(dirname "$j")/libSystem.IO.Compression.Native.so"
+  if [ ! -f "$l" ]; then ls=absent
+  elif LC_ALL=C tr -c ' -~' '\n' < "$l" 2>/dev/null | grep -q -F 'timedownlifeleftback'; then ls=bundled
+  else ls=linked; fi
+  echo "DOTNETRT${T}$v${T}${j#$R}${T}$ls"
+done
+
 # --- Java: brotli4j bundles the C library inside jars (cannot fingerprint) ---
 find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f \
   \( -iname 'brotli4j*.jar' -o -iname 'native-linux-*.jar' -o -iname 'jvmbrotli*.jar' \) -print 2>/dev/null |
@@ -199,6 +218,8 @@ classify() {
 } | sort -u | while IFS= read -r f; do classify "$f"; done
 echo "END"
 PROBE_EOF
+
+[ "$PRINT_PROBE" = 1 ] && { printf '%s\n' "$PROBE"; exit 0; }
 
 # ---------------------------------------------------------------------------
 # Evaluator: probe output -> findings + one verdict. Prints
@@ -257,6 +278,7 @@ evaluate() {
   $1 == "OS"    { os = $2 }
   $1 == "NODE" || $1 == "BUN" || $1 == "ENVOY" { nr++; RK[nr] = tolower($1); RV[nr] = $2; RP[nr] = $3 }
   $1 == "BIN"   { bin[$3] = $2; binorder[++nb] = $3 }
+  $1 == "DOTNETRT" { nd++; DV[nd] = $2; DP[nd] = $3; DL[nd] = $4; d = $3; sub(/\/[^\/]*$/, "", d); DD[nd] = d; dver[d] = $2 }
   $1 == "PY" {
     n = tolower($2); v = $3
     if (n == "brotli")          add(vcmp(v, "1.2.1") < 0 ? "VULN" : "OK", "python", "Brotli " v, vcmp(v, "1.2.1") < 0 ? "upgrade to Brotli>=1.2.1" : "", $4)
@@ -285,13 +307,20 @@ evaluate() {
       p = binorder[i]; if (p in used) continue; s = bin[p]
       # .NET shared runtime: version from the path
       dv = ""; if (match(p, /Microsoft\.NETCore\.App\/[0-9]+\.[0-9]+\.[0-9]+/)) { dv = substr(p, RSTART + 22, RLENGTH - 22) }
+      pd = p; sub(/\/[^\/]*$/, "", pd)
+      if (dv == "" && (pd in dver) && p ~ /libSystem\.IO\.Compression\.Native\.so$/) dv = dver[pd]
       if (s == "PATCHED")             add("OK", "binary", p, "contains Brotli fix", p)
       else if (s == "PATCHED_10X")    add("OK", "binary", p, "Brotli 1.0.x with fix", p)
       else if (s == "VULNERABLE")     add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.1.x/1.2.x without fix)" (dv != "" ? "; " fixhint("dotnet") : ""), p)
-      else if (s == "VULNERABLE_10X") add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.0.x without fix)", p)
+      else if (s == "VULNERABLE_10X") add("VULN", "binary", p, "embeds vulnerable Brotli decoder (1.0.x without fix)" (dv != "" ? "; " fixhint("dotnet") : ""), p)
       else if (dv != "" && rt_state("dotnet", dv) == "OK") add("OK", "dotnet", ".NET " dv, "runtime version contains the fix", p)
       else if (dv != "")              add("VULN", "dotnet", ".NET " dv, fixhint("dotnet"), p)
       else                            add("REVIEW", "binary", p, "contains Brotli decoder, version not detectable (stripped). Ask vendor / rebuild", p)
+    }
+    for (i = 1; i <= nd; i++) {
+      w = ".NET " DV[i] (DD[i] ~ /\/shared\/Microsoft\.NETCore\.App\// ? " runtime" : " (self-contained app)")
+      if (DL[i] == "linked") add("INFO", "dotnet", w, "uses the system libbrotli; its patch state is that library (checked separately)", DP[i])
+      else if (DL[i] == "absent") add("INFO", "dotnet", w, "no Brotli native library shipped", DP[i])
     }
     v = "NO_BROTLI_FOUND"
     for (i = 1; i <= nf; i++) if (FS_[i] == "OK" && v == "NO_BROTLI_FOUND") v = "PATCHED"
@@ -383,6 +412,19 @@ esac
 
 total=$(wc -l < "$OUT/targets.tsv" | tr -d ' ')
 [ "$total" -gt 0 ] || { echo "Nothing to scan (no running containers found)." >&2; exit 0; }
+
+if [ "$DRY_RUN" = 1 ]; then
+  echo "Dry run: would scan $total unique image(s); nothing was executed or pulled."
+  while IFS="$TAB" read -r _key image ns pod ctr method ref; do
+    case "$method" in
+      exec)   printf '  exec   %s   in %s/%s -c %s\n' "$image" "$ns" "$pod" "$ctr" ;;
+      image)  printf '  pull   %s   as %s\n' "$image" "$ref" ;;
+      rootfs) printf '  read   %s\n' "$ref" ;;
+    esac
+  done < "$OUT/targets.tsv"
+  echo "Target list: $OUT/targets.tsv"
+  exit 0
+fi
 
 TIMEOUT=(); command -v timeout >/dev/null 2>&1 && TIMEOUT=(timeout "$TMO")
 

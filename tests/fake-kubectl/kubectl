@@ -20,6 +20,7 @@ case "${1:-}" in
     done
     shift                      # --
     probe="$3"; deep="$7"      # sh -c PROBE probe "" 1 DEEP
+    [ -n "${BROTLI_TEST_PROBE_DUMP:-}" ] && printf '%s\n' "$probe" > "$BROTLI_TEST_PROBE_DUMP"
     sh="${TEST_SH:-sh}"
     case "$pod" in
       distroless-*)

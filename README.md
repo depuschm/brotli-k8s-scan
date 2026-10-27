@@ -1,5 +1,6 @@
 # brotli-k8s-scan
 
+[![tests](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml/badge.svg)](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml)
 ![CVE-2026-111497](https://img.shields.io/badge/CVE-2026--111497-critical-red)
 ![license MIT](https://img.shields.io/badge/license-MIT-blue)
 ![dependencies: bash](https://img.shields.io/badge/dependencies-bash%20%2B%20coreutils-informational)
@@ -32,12 +33,15 @@ Verdict: PATCHED
 
 ## Quick start
 
-One bash script, read-only, nothing to install in the cluster.
+One bash script, read-only, nothing to install in the cluster. Download a
+release and verify it (see [Verify before you run](#verify-before-you-run)):
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/depuschm/brotli-k8s-scan/main/brotli-k8s-scan.sh
-less brotli-k8s-scan.sh        # read it first
+curl -fsSLO https://github.com/depuschm/brotli-k8s-scan/releases/latest/download/brotli-k8s-scan.sh
+curl -fsSLO https://github.com/depuschm/brotli-k8s-scan/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
 chmod +x brotli-k8s-scan.sh
+./brotli-k8s-scan.sh --dry-run    # shows what it would touch, touches nothing
 ```
 
 | You want to scan | Command | Needs |
@@ -50,7 +54,7 @@ chmod +x brotli-k8s-scan.sh
 
 Useful options: `-n NAMESPACE`, `--context CTX`, `--platform linux/arm64`,
 `--deep` (also fingerprint every executable and shared library > 100 KB, to find
-statically linked copies), `--sarif`, `-o DIR`.
+statically linked copies), `--sarif`, `-o DIR`, `--dry-run`, `--print-probe`.
 
 Example (cluster):
 
@@ -77,7 +81,7 @@ VULNERABLE registry.example/proxy:1.0
 | Node.js | 22.x, 24.x, 26.x before the fix; 20.x and older get no fix | 22.23.4, 24.22.1, 26.12.1 | `node -v` + fingerprint |
 | Bun | 1.4.3 and earlier | 1.4.4 | `bun --version` + fingerprint |
 | Python `Brotli` / `brotlicffi` | ≤ 1.2.0 / ≤ 1.2.0.x | 1.2.1 / 1.2.1.0 | `*.dist-info` in every venv + fingerprint of the wheel |
-| .NET | before the fix | 8.0.33, 9.0.22, 10.0.14 | runtime version + fingerprint of `libSystem.IO.Compression.Native.so` |
+| .NET | before the fix | 8.0.33, 9.0.22, 10.0.14 | fingerprint of `libSystem.IO.Compression.Native.so`, else the runtime version (framework folder or a self-contained app's `*.deps.json`); runtimes built against the system `libbrotli` (e.g. Ubuntu's .NET 10) are judged by that library |
 | Envoy | 1.36 – 1.39 before the fix | 1.36.12, 1.37.8, 1.38.6, 1.39.3, 1.40.0 | `envoy --version` + fingerprint |
 | Istio | 1.29 – 1.31 before the fix | 1.29.9, 1.30.6, 1.31.2 | fingerprint of the `envoy` binary in the proxy image |
 | anything else with Brotli compiled in (Pillow, curl, nginx modules, Electron apps, ...) | | | binary fingerprint |
@@ -119,7 +123,7 @@ Gate a build on it, and send the results to GitHub code scanning:
   run: ./brotli-k8s-scan.sh --image "$IMAGE" --sarif -o brotli-scan
 - name: Upload results
   if: always()
-  uses: github/codeql-action/upload-sarif@v3
+  uses: github/codeql-action/upload-sarif@v4
   with:
     sarif_file: brotli-scan/report.sarif
 ```
@@ -154,11 +158,26 @@ error table.
 
 Details and the evidence behind the fingerprint: [docs/how-detection-works.md](docs/how-detection-works.md).
 
+## Verify before you run
+
+A scanner that runs inside your production pods should be easy to check:
+
+| What | How |
+|---|---|
+| The file is the one this repository built | `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan` (signed build provenance from GitHub Actions) |
+| Exactly what runs inside your containers | `./brotli-k8s-scan.sh --print-probe` (about 100 lines of POSIX sh; a test checks it is byte-identical to what is executed) |
+| Which pods / images it would touch | `./brotli-k8s-scan.sh --dry-run` (with `--no-exec`: which images it would pull) |
+| It needs no network | `unshare -rn ./brotli-k8s-scan.sh --rootfs /` works without any network access |
+| The detection is correct | every change is tested in [GitHub Actions](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml) on x86-64 and arm64 against real vulnerable and fixed builds (see [Tests](#tests)) |
+
+Found a wrong verdict or a security problem? See [SECURITY.md](SECURITY.md).
+
 ## Permissions
 
 - Default cluster mode: `get`/`list` pods and `create` on `pods/exec`. See
   [`rbac/scanner-clusterrole.yaml`](rbac/scanner-clusterrole.yaml). `pods/exec`
-  is powerful: grant it only for the scan.
+  is powerful: grant it only for the scan. One namespace only:
+  [`rbac/scanner-role-namespaced.yaml`](rbac/scanner-role-namespaced.yaml).
 - `--no-exec`: only `get`/`list` pods, plus pull access to your registries
   (`crane auth login` / `docker login`).
 
@@ -172,8 +191,8 @@ Details and the evidence behind the fingerprint: [docs/how-detection-works.md](d
   are found (with `--deep`) but reported as `REVIEW`.
 - Cluster modes see running pods only. CronJobs between runs or
   scaled-to-zero workloads: scan their images with `--image`.
-- The .NET fingerprint follows the same logic but has only been tested with a
-  simulated runtime layout; the .NET version rule is tested.
+- .NET single-file apps that embed the native library inside the executable
+  are only found with `--deep`, and then as `REVIEW`.
 
 This tool contains no exploit code and sends nothing anywhere except through
 your own `kubectl` / registry tools.
@@ -191,20 +210,27 @@ Different tools answer different questions; they complement each other:
 
 ## Tests
 
-Real vulnerable and fixed builds (Brotli 1.0.9 / 1.0.10 / 1.2.0 / 1.2.1, Node.js
-22.23.3 / 22.23.4, Python `Brotli` and `brotlicffi` wheels, Ubuntu's
-`libbrotli1` before and after the backport) are assembled into fake container
-filesystems, with fake `kubectl`, `crane` and `docker`.
+Real vulnerable and fixed builds are assembled into fake container
+filesystems, with fake `kubectl`, `crane` and `docker`:
+
+- Brotli 1.0.9 / 1.0.10 / 1.2.0 / 1.2.1 built from source, plus a stripped static program
+- Node.js 22.23.3 / 22.23.4 official binaries
+- Python `Brotli` 1.2.0 / 1.2.1 and `brotlicffi` 1.2.0.1 / 1.2.1.0 wheels
+- Ubuntu `libbrotli1` 1.1.0-2build2 / 1.1.0-2ubuntu0.1 (same version string, backported fix)
+- .NET: Ubuntu's .NET 8.0.32 and 10.0.13 runtimes, official Microsoft runtimes
+  8.0.32 / 8.0.33 / 10.0.13 / 10.0.14 (downloaded in CI), self-contained app layouts
 
 ```bash
-tests/build-fixtures.sh   # once; downloads sources and binaries (needs network)
+tests/build-fixtures.sh   # once; downloads sources and binaries (needs network; BROTLI_TEST_STRICT=1 makes every fixture mandatory)
 tests/run-tests.sh        # offline: re-runs itself under `unshare -rn` without network
 ```
 
 The suite repeats every probe test with `sh`, `dash` and, if installed,
 BusyBox (with only BusyBox tools in `PATH`, like an Alpine image). It also
 validates `report.sarif` against the SARIF 2.1.0 schema and checks the YARA
-rules against the same binaries.
+rules against the same binaries. In GitHub Actions it runs on x86-64 and arm64
+with every fixture mandatory, so a skipped download fails the build instead of
+silently reducing coverage.
 
 ## License
 

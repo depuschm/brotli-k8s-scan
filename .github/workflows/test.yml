@@ -1,0 +1,82 @@
+name: tests
+
+# Runs the full test suite on every change. Fixtures (real vulnerable and fixed
+# Brotli, Node.js, Python, Ubuntu and Microsoft .NET builds) are downloaded
+# first; the tests themselves then run in a network namespace WITHOUT network.
+# BROTLI_TEST_STRICT=1: every fixture is mandatory and nothing may be skipped.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fake-kubectl/kubectl \
+            tests/fake-image-tools/crane tests/fake-image-tools/docker tests/fake-image-tools/_map.sh
+      - name: bash syntax
+        run: for f in brotli-k8s-scan.sh tests/*.sh; do bash -n "$f"; done
+
+  test:
+    name: test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends busybox-static dash cmake jq binutils
+          busybox --help | head -n 1
+
+      - name: Cache downloads and builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            tests/.cache/brotli
+            tests/.cache/build-*
+            tests/.cache/src-*
+            tests/.cache/py-*
+            tests/.cache/node-*
+            tests/.cache/ubuntu
+            tests/.cache/msdotnet
+            tests/.cache/pylib
+            tests/.cache/sarif-schema-2.1.0.json
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh') }}
+
+      - name: Build fixtures (downloads; network on)
+        env:
+          BROTLI_TEST_STRICT: "1"
+        run: tests/build-fixtures.sh
+
+      - name: Allow unprivileged user namespaces (for the offline sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Run tests (offline; network off)
+        env:
+          BROTLI_TEST_STRICT: "1"
+        run: tests/run-tests.sh

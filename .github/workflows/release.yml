@@ -1,0 +1,54 @@
+name: release
+
+# When a release is published on GitHub: run the full test suite, then attach
+# the scanner, the YARA rules and SHA256SUMS to the release, together with a
+# signed build provenance attestation (verify with `gh attestation verify`).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/test.yml
+
+  assets:
+    needs: tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # upload release assets
+      id-token: write      # sign the attestation (Sigstore)
+      attestations: write  # store the attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that the script version matches the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          v=$(bash brotli-k8s-scan.sh --version | awk '{print $2}')
+          [ "v$v" = "$TAG" ] || { echo "script says $v, release tag is $TAG"; exit 1; }
+
+      - name: Collect files and checksums
+        run: |
+          mkdir dist
+          cp brotli-k8s-scan.sh yara/brotli_cve_2026_111497.yar dist/
+          (cd dist && sha256sum brotli-k8s-scan.sh brotli_cve_2026_111497.yar > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/brotli-k8s-scan.sh
+            dist/brotli_cve_2026_111497.yar
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/brotli-k8s-scan.sh dist/brotli_cve_2026_111497.yar dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"

@@ -78,30 +78,67 @@ nodebin() {  # $1=version
 }
 nodebin 22.23.3; nodebin 22.23.4
 
-echo "== Ubuntu libbrotli1: unpatched 1.1.0-2build2 and the backport 1.1.0-2ubuntu0.1 (same version string)"
-UBU_OK=0
-case "$NODE_ARCH" in x64) UARCH=amd64; MIRROR=http://archive.ubuntu.com/ubuntu; SEC=http://security.ubuntu.com/ubuntu ;;
-                     arm64) UARCH=arm64; MIRROR=http://ports.ubuntu.com/ubuntu-ports; SEC=$MIRROR ;; esac
+# Optional fixtures are skipped when a download fails, unless
+# BROTLI_TEST_STRICT=1 (CI), where every fixture is required.
+optional_failed() {
+  if [ "${BROTLI_TEST_STRICT:-0}" = 1 ]; then echo "ERROR: $1 (BROTLI_TEST_STRICT=1)" >&2; exit 1; fi
+  echo "   (skipped: $1; those tests will be skipped)"
+}
+case "$NODE_ARCH" in x64) UARCH=amd64; MIRRORS="http://archive.ubuntu.com/ubuntu http://security.ubuntu.com/ubuntu" ;;
+                     arm64) UARCH=arm64; MIRRORS="http://ports.ubuntu.com/ubuntu-ports" ;; esac
+fetch_deb() {  # $1=source package $2=binary package $3=version $4=output file
+  [ -s "$4" ] && return 0
+  local f="${2}_${3}_${UARCH}.deb" m pfx
+  pfx=$(printf '%s' "$1" | cut -c1)
+  for m in $MIRRORS; do curl -fsSL -o "$4" "$m/pool/main/$pfx/$1/$f" 2>/dev/null && return 0; done
+  # superseded versions disappear from the mirrors; Launchpad keeps every build
+  curl -fsSL -o "$4" "https://launchpad.net/ubuntu/+archive/primary/+files/$f" 2>/dev/null && return 0
+  rm -f "$4"; return 1
+}
 debx() {  # $1=.deb $2=dest : extract without installing
   mkdir -p "$2"
   if command -v dpkg-deb >/dev/null 2>&1; then dpkg-deb -x "$1" "$2"
   else (d=$(mktemp -d) && cd "$d" && ar x "$1" && tar -xf data.tar.* -C "$2" && rm -rf "$d"); fi
 }
-if mkdir -p ubuntu && (cd ubuntu &&
-     { [ -f old.deb ] || curl -fsSL -o old.deb "$MIRROR/pool/main/b/brotli/libbrotli1_1.1.0-2build2_${UARCH}.deb"; } &&
-     { [ -f fixed.deb ] || curl -fsSL -o fixed.deb "$SEC/pool/main/b/brotli/libbrotli1_1.1.0-2ubuntu0.1_${UARCH}.deb"; } &&
-     rm -rf old fixed && debx "$PWD/old.deb" "$PWD/old" && debx "$PWD/fixed.deb" "$PWD/fixed"); then
+
+echo "== Ubuntu libbrotli1: unpatched 1.1.0-2build2 and the backport 1.1.0-2ubuntu0.1 (same version string)"
+UBU_OK=0
+mkdir -p ubuntu
+if fetch_deb brotli libbrotli1 1.1.0-2build2 ubuntu/old.deb && fetch_deb brotli libbrotli1 1.1.0-2ubuntu0.1 ubuntu/fixed.deb &&
+   rm -rf ubuntu/old ubuntu/fixed && debx "$PWD/ubuntu/old.deb" "$PWD/ubuntu/old" && debx "$PWD/ubuntu/fixed.deb" "$PWD/ubuntu/fixed"; then
   UBU_OK=1
-else
-  echo "   (skipped: could not download/extract the Ubuntu packages; those tests will be skipped)"
-fi
+else optional_failed "Ubuntu libbrotli1 packages not available"; fi
+
+echo "== Ubuntu .NET runtimes 8.0.32 (bundles Brotli) and 10.0.13 (uses system libbrotli)"
+UDN_OK=0
+if [ "$UBU_OK" = 1 ] &&
+   fetch_deb dotnet8 dotnet-runtime-8.0 8.0.32-0ubuntu1~24.04.1 ubuntu/dotnet8.deb &&
+   fetch_deb dotnet10 dotnet-runtime-10.0 10.0.13-0ubuntu1~24.04.1 ubuntu/dotnet10.deb &&
+   rm -rf ubuntu/dotnet8 ubuntu/dotnet10 && debx "$PWD/ubuntu/dotnet8.deb" "$PWD/ubuntu/dotnet8" &&
+   debx "$PWD/ubuntu/dotnet10.deb" "$PWD/ubuntu/dotnet10"; then
+  UDN_OK=1
+else optional_failed "Ubuntu .NET runtime packages not available"; fi
+
+echo "== Official Microsoft .NET runtimes: 8.0.32 / 8.0.33 and 10.0.13 / 10.0.14 (before / after the fix)"
+MSDN_OK=0
+MS_VERSIONS="8.0.32 8.0.33 10.0.13 10.0.14"
+mkdir -p msdotnet
+ms_ok=1
+for v in $MS_VERSIONS; do
+  t="msdotnet/dotnet-runtime-$v.tar.gz"
+  [ -s "$t" ] && continue
+  curl -fsSL -o "$t" "https://builds.dotnet.microsoft.com/dotnet/Runtime/$v/dotnet-runtime-$v-linux-$NODE_ARCH.tar.gz" 2>/dev/null ||
+  curl -fsSL -o "$t" "https://dotnetcli.azureedge.net/dotnet/Runtime/$v/dotnet-runtime-$v-linux-$NODE_ARCH.tar.gz" 2>/dev/null ||
+  { rm -f "$t"; ms_ok=0; }
+done
+if [ "$ms_ok" = 1 ]; then MSDN_OK=1; else optional_failed "Microsoft .NET runtime downloads not reachable"; fi
 
 echo "== test helpers: yara-python, jsonschema, SARIF 2.1.0 schema"
 [ -f pylib/.ok ] || { python3 -m pip install -q --target pylib yara-python jsonschema && touch pylib/.ok; } ||
-  echo "   (skipped: pip install failed; YARA and SARIF schema tests will be skipped)"
+  optional_failed "pip install of yara-python/jsonschema failed"
 [ -f sarif-schema-2.1.0.json ] || curl -fsSL -o sarif-schema-2.1.0.json \
   https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json ||
-  echo "   (skipped: SARIF schema download failed)"
+  optional_failed "SARIF schema download failed"
 
 echo "== assembling fake container filesystems"
 rm -rf "$FX"; mkdir -p "$FX"
@@ -153,12 +190,38 @@ if [ "$UBU_OK" = 1 ]; then
   done
 fi
 
+# Real .NET runtimes
+if [ "$UDN_OK" = 1 ]; then
+  mkdir -p "$FX/dotnet8-ubuntu/usr/lib"; cp -a ubuntu/dotnet8/usr/lib/dotnet "$FX/dotnet8-ubuntu/usr/lib/"
+  for k in old fixed; do
+    mkdir -p "$FX/dotnet10-ubuntu-$k/usr/lib"
+    cp -a ubuntu/dotnet10/usr/lib/dotnet "$FX/dotnet10-ubuntu-$k/usr/lib/"
+    cp -a "ubuntu/$k/." "$FX/dotnet10-ubuntu-$k/"
+  done
+  # self-contained app layout: the app's own deps.json + the real native library
+  d="$FX/dotnet-selfcontained-ubuntu/app"; mkdir -p "$d"
+  cp ubuntu/dotnet8/usr/lib/dotnet/shared/Microsoft.NETCore.App/8.0.32/libSystem.IO.Compression.Native.so "$d/"
+  printf '{"libraries":{"runtimepack.Microsoft.NETCore.App.Runtime.linux-x64/8.0.32":{"type":"runtimepack"}}}\n' > "$d/myapp.deps.json"
+fi
+if [ "$MSDN_OK" = 1 ]; then
+  for v in $MS_VERSIONS; do
+    mkdir -p "$FX/msdotnet-$v/usr/share/dotnet"
+    tar -xzf "msdotnet/dotnet-runtime-$v.tar.gz" -C "$FX/msdotnet-$v/usr/share/dotnet"
+  done
+fi
+
 # .NET runtime layout (SYNTHETIC: the "native lib" is the stripped static test
 # program, i.e. Brotli without a readable error table, so the verdict must
 # come from the runtime version in the path)
 for v in 10.0.7 10.0.14; do
   d="$FX/dotnet-$v/usr/share/dotnet/shared/Microsoft.NETCore.App/$v"
   mkdir -p "$d"; cp app-static "$d/libSystem.IO.Compression.Native.so"
+done
+
+for v in 8.0.32 8.0.33; do
+  d="$FX/dotnet-selfcontained-synthetic-$v/app"; mkdir -p "$d"
+  cp app-static "$d/libSystem.IO.Compression.Native.so"
+  printf '{"libraries":{"runtimepack.Microsoft.NETCore.App.Runtime.linux-x64/%s":{"type":"runtimepack"}}}\n' "$v" > "$d/myapp.deps.json"
 done
 
 echo "fixtures ready in $FX"

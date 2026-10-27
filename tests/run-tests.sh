@@ -31,6 +31,9 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '        %s\n' "$2"; }
+skip() {  # in CI (BROTLI_TEST_STRICT=1) nothing may be skipped
+  if [ "${BROTLI_TEST_STRICT:-0}" = 1 ]; then bad "$1 (not allowed with BROTLI_TEST_STRICT=1)"; else printf '  skip  %s\n' "$1"; fi
+}
 expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected '$3', got '$2'"; fi; }
 expect_has() { if grep -q -F -- "$3" "$2"; then ok "$1"; else bad "$1" "missing: $3"; fi; }
 expect_not() { if grep -q -F -- "$3" "$2"; then bad "$1" "unexpected: $3"; else ok "$1"; fi; }
@@ -50,6 +53,8 @@ if command -v busybox >/dev/null 2>&1; then
   BB="$TMP/bb"; mkdir -p "$BB"; busybox --install -s "$BB" 2>/dev/null
   SHELLS="$SHELLS busybox_sh"
 fi
+case " $SHELLS " in *" dash "*) ;; *) skip "dash not installed: probe not tested with dash" ;; esac
+[ -n "$BB" ] || skip "busybox not installed: probe not tested with BusyBox (Alpine)"
 
 rootfs() {  # $1=fixture $2=shell $3..=extra args ; sets RC, OUTF
   local fx=$1 sh=$2; shift 2
@@ -84,10 +89,27 @@ for sh in $SHELLS; do
   rootfs none "$sh";    expect_eq "jar only: review" "$(verdict "$OUTF")" REVIEW
   rootfs dotnet-10.0.7 "$sh";  expect_eq ".NET 10.0.7 runtime: vulnerable (version from path)" "$(verdict "$OUTF")" VULNERABLE
   rootfs dotnet-10.0.14 "$sh"; expect_eq ".NET 10.0.14 runtime: patched (version from path)"  "$(verdict "$OUTF")" PATCHED
+  if [ -d "$BROTLI_TEST_FIXTURES/dotnet8-ubuntu" ]; then
+    rootfs dotnet8-ubuntu "$sh"; expect_eq "Ubuntu .NET 8.0.32 (bundled Brotli 1.0.x): vulnerable" "$(verdict "$OUTF")" VULNERABLE
+    expect_has "Ubuntu .NET 8.0.32: decided by the fingerprint" "$OUTF" "[VULN  ] binary  /usr/lib/dotnet/shared/Microsoft.NETCore.App/8.0.32/libSystem.IO.Compression.Native.so"
+    rootfs dotnet10-ubuntu-old "$sh";   expect_eq "Ubuntu .NET 10.0.13 + unpatched libbrotli1: vulnerable" "$(verdict "$OUTF")" VULNERABLE
+    expect_has "Ubuntu .NET 10.0.13: reported as using the system libbrotli" "$OUTF" "uses the system libbrotli"
+    rootfs dotnet10-ubuntu-fixed "$sh"; expect_eq "Ubuntu .NET 10.0.13 + patched libbrotli1: patched (version alone would say vulnerable)" "$(verdict "$OUTF")" PATCHED
+    rootfs dotnet-selfcontained-ubuntu "$sh"; expect_eq "self-contained app with real .NET 8.0.32 library: vulnerable" "$(verdict "$OUTF")" VULNERABLE
+  else skip "Ubuntu .NET fixtures not built"; fi
+  rootfs dotnet-selfcontained-synthetic-8.0.32 "$sh"; expect_eq "self-contained app, version from deps.json 8.0.32: vulnerable" "$(verdict "$OUTF")" VULNERABLE
+  rootfs dotnet-selfcontained-synthetic-8.0.33 "$sh"; expect_eq "self-contained app, version from deps.json 8.0.33: patched"    "$(verdict "$OUTF")" PATCHED
+  if [ -d "$BROTLI_TEST_FIXTURES/msdotnet-8.0.32" ]; then
+    for v in 8.0.32:VULNERABLE 8.0.33:PATCHED 10.0.13:VULNERABLE 10.0.14:PATCHED; do
+      rootfs "msdotnet-${v%%:*}" "$sh"
+      expect_eq "official Microsoft .NET ${v%%:*}: ${v#*:}" "$(verdict "$OUTF")" "${v#*:}"
+      sed -n 's/^  \[\(VULN  \|OK    \)\] \(binary\|dotnet\) */        decided by: \2 /p' "$OUTF" | grep -i compression | head -n 1
+    done
+  else skip "official Microsoft .NET runtimes not downloaded (CI downloads them)"; fi
   if [ -d "$BROTLI_TEST_FIXTURES/ubuntu-old" ]; then
     rootfs ubuntu-old "$sh";   expect_eq "Ubuntu libbrotli1 1.1.0-2build2: vulnerable"           "$(verdict "$OUTF")" VULNERABLE
     rootfs ubuntu-fixed "$sh"; expect_eq "Ubuntu libbrotli1 1.1.0-2ubuntu0.1 (backport): patched" "$(verdict "$OUTF")" PATCHED
-  else echo "  skip  Ubuntu backport fixture not built"; fi
+  else skip "Ubuntu backport fixture not built"; fi
 done
 
 # --- cluster mode with the fake kubectl ------------------------------------
@@ -139,6 +161,26 @@ for sh in $SHELLS; do
   expect_has "workloads still listed"              "$REP/report.tsv" "web/StatefulSet/web"
 done
 
+# --- audit helpers: --print-probe and --dry-run -----------------------------
+echo "audit helpers"
+export TEST_SH=sh
+bash "$SCAN" --print-probe > "$TMP/probe.txt"
+expect_has "--print-probe prints the probe"          "$TMP/probe.txt" 'R="$1"; X="${2:-1}"; D="${3:-0}"'
+expect_not "the probe contains no URLs"              "$TMP/probe.txt" "://"
+BROTLI_TEST_PROBE_DUMP="$TMP/probe-ran.txt" cluster audit -n shop
+if cmp -s "$TMP/probe.txt" "$TMP/probe-ran.txt"; then ok "--print-probe shows exactly the code that runs in containers"
+else bad "--print-probe shows exactly the code that runs in containers"; fi
+cluster dry-exec --dry-run
+expect_eq "--dry-run: exit 0"                        "$RC" 0
+expect_eq "--dry-run: lists 8 images to exec into"   "$(grep -c '^  exec ' "$TMP/k-dry-exec.out")" 8
+expect_eq "--dry-run: no kubectl exec happened"      "$(grep -c ' exec ' "$LOG")" 0
+cluster dry-pull --dry-run --no-exec
+expect_eq "--dry-run --no-exec: lists 8 images to pull" "$(grep -c '^  pull ' "$TMP/k-dry-pull.out")" 8
+expect_eq "--dry-run --no-exec: nothing pulled"      "$(grep -c 'crane export' "$LOG")" 0
+mkdir -p "$TMP/empty-cwd"
+(cd "$TMP/empty-cwd" && bash "$SCAN" --print-probe > /dev/null)
+expect_eq "--print-probe writes no files"             "$(ls -A "$TMP/empty-cwd" | wc -l | tr -d ' ')" 0
+
 # --- image mode with fake crane / docker ------------------------------------
 image() {  # $1=label $2=tool, rest = scanner args ; sets RC, REP, LOG, OUTF
   local label=$1 tool=$2; shift 2
@@ -183,7 +225,7 @@ if [ -f "$PYLIB/.ok" ] && [ -f "$SCHEMA" ]; then
 jsonschema.validate(json.load(open(sys.argv[3])), json.load(open(sys.argv[2])))' "$PYLIB" "$SCHEMA" "$S" 2> "$TMP/schema.err"
   then ok "report.sarif validates against the SARIF 2.1.0 schema"
   else bad "report.sarif validates against the SARIF 2.1.0 schema" "$(tail -n 1 "$TMP/schema.err")"; fi
-else echo "  skip  SARIF schema validation (helpers not built)"; fi
+else skip "SARIF schema validation (helpers not built)"; fi
 
 # --- version rules (evaluator unit tests) ----------------------------------
 echo "version rules"
@@ -211,7 +253,7 @@ if [ -f "$PYLIB/.ok" ]; then
   cat "$TMP/yara.out"
   pass=$((pass + $(grep -c '^  ok' "$TMP/yara.out"))); fail=$((fail + $(grep -c '^  FAIL' "$TMP/yara.out")))
   grep -q -e '^  ok' -e '^  FAIL' "$TMP/yara.out" || bad "yara_check.py ran" "$(tail -n 1 "$TMP/yara.out")"
-else echo "  skip  YARA tests (helpers not built)"; fi
+else skip "YARA tests (helpers not built)"; fi
 
 echo
 echo "passed: $pass, failed: $fail"

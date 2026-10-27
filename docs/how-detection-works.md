@@ -65,6 +65,24 @@ LC_ALL=C grep -c _ERROR_FORMAT_BLOCK_SWITCH "$f"       # 0: vulnerable, >0: fixe
 | Python `brotlicffi` 1.2.0.1 / 1.2.1.0 wheels | 1.2.0.1 / 1.2.1.0 | vulnerable / fixed |
 | Bun 1.4.4 (official binary) | 1.4.4 | fixed |
 | Pillow wheel's bundled `libbrotlidec` | 1.2.0 | vulnerable |
+| Ubuntu .NET 8.0.32 `libSystem.IO.Compression.Native.so` (bundled Brotli 1.0.x) | .NET 8.0.32 | vulnerable |
+
+## .NET is a special case
+
+.NET carries Brotli in `libSystem.IO.Compression.Native.so`, but not always the
+same way:
+
+- **Ubuntu's .NET 8.0.32** bundles a Brotli 1.0.x copy *with* the error table,
+  so the fingerprint decides directly (vulnerable).
+- **Ubuntu's .NET 10.0.13** does not bundle Brotli at all; it links the
+  system `libbrotli`. Whether it is safe depends only on that library: with
+  Ubuntu's fixed `libbrotli1 1.1.0-2ubuntu0.1` it is, although "10.0.13" is
+  older than Microsoft's fixed 10.0.14. A version check gets this wrong.
+- **Builds without a readable error table** fall back to the runtime version,
+  taken from the framework folder (`shared/Microsoft.NETCore.App/<version>/`)
+  or, for self-contained apps, from the app's `*.deps.json`. Microsoft fixed
+  .NET in 8.0.33, 9.0.22 and 10.0.14. The official Microsoft builds before and
+  after the fix are tested in CI.
 
 ## Limits
 

@@ -28,6 +28,15 @@ cases = [
     ("ubuntu-fixed/usr/lib/x86_64-linux-gnu/libbrotlidec.so.1.1.0", P),
     ("ubuntu-old/usr/lib/aarch64-linux-gnu/libbrotlidec.so.1.1.0", V),
     ("ubuntu-fixed/usr/lib/aarch64-linux-gnu/libbrotlidec.so.1.1.0", P),
+    # real .NET runtimes
+    ("dotnet8-ubuntu/usr/lib/dotnet/shared/Microsoft.NETCore.App/8.0.32/libSystem.IO.Compression.Native.so", V),
+    ("dotnet10-ubuntu-old/usr/lib/dotnet/shared/Microsoft.NETCore.App/10.0.13/libSystem.IO.Compression.Native.so", None),
+    # official Microsoft builds: the error table may be stripped (then Unknown),
+    # but a vulnerable build must never look patched and vice versa
+    ("msdotnet-8.0.32/usr/share/dotnet/shared/Microsoft.NETCore.App/8.0.32/libSystem.IO.Compression.Native.so", {V, U}),
+    ("msdotnet-8.0.33/usr/share/dotnet/shared/Microsoft.NETCore.App/8.0.33/libSystem.IO.Compression.Native.so", {P, U}),
+    ("msdotnet-10.0.13/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.13/libSystem.IO.Compression.Native.so", {V, U}),
+    ("msdotnet-10.0.14/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.14/libSystem.IO.Compression.Native.so", {P, U}),
 ]
 fail = 0
 for rel, want in cases:
@@ -35,7 +44,12 @@ for rel, want in cases:
     if not os.path.exists(path):
         continue  # optional fixture (other arch / Ubuntu download skipped)
     got = sorted(m.rule for m in rules.match(path))
-    good = got == [want]
+    if want is None:
+        good = got == []
+    elif isinstance(want, set):
+        good = len(got) == 1 and got[0] in want
+    else:
+        good = got == [want]
     fail += not good
     print(f"  {'ok  ' if good else 'FAIL'}  yara: {rel} -> {','.join(got) or 'no match'}")
 sys.exit(1 if fail else 0)
