@@ -366,6 +366,8 @@ NAMES = (b"node", b"nodejs", b"bun", b"envoy", b"nginx", b"curl", b"dotnet", b"l
          b"app.deps.json", b"brotli4j-1.16.0.jar", b"proc", b"sys", b"dev", b"etc", b"usr", b"lib")
 WEIRD = (b"\t", b"\n", b"\r", b"\x1b[2J", b"\x7f", b"\\n", b"\\t", b"\\c", b"\\", b" ", b"-", b"*", b"?",
          b"[", b"]", b"'", b'"', b"$(x)", b"`x`", b";", b"\xc3\xa9", b"\xff", b"\x81", b"\x88", b"..", b".")
+PY_DIRS = (b"brotli-*.dist-info", b"brotli-*.egg-info", b"brotlicffi-*.dist-info", b"brotlicffi-*.egg-info",
+           b"brotlipy-*.dist-info", b"brotlipy-*.egg-info")
 CANDIDATES = (b"node", b"nodejs", b"bun", b"envoy", b"nginx", b"curl", b"dotnet", b"libnode.so*",
               b"libbrotli*", b"_brotli*.so", b"*brotli*.so*", b"libSystem.IO.Compression.Native.so",
               b"libcurl.so*", b"*.node", b"ngx_http_brotli*")
@@ -448,13 +450,30 @@ def has_ctrl(b):
     return bool(re.search(rb"[\x00-\x1f\x7f]", b))
 
 
+def py_record(rel):
+    """The PY record the probe prints for a dist-info/egg-info directory."""
+    b = os.path.basename(rel)
+    for suffix in (b".dist-info", b".egg-info"):
+        if b.endswith(suffix):
+            b = b[:-len(suffix)]
+    n = b.split(b"-", 1)[0]
+    v = b.split(b"-", 1)[1] if b"-" in b else b
+    if b"-py" in v:
+        v = v[:v.index(b"-py")]
+    return (n, v, rel)
+
+
 def expected_tree(root):
-    """What the probe should report: candidate files with their state, odd names."""
-    bins, odd = {}, 0
+    """What the probe should report: candidate files with their state, Python
+    package directories, odd names."""
+    bins, pys, odd = {}, set(), 0
     for d, dns, fns in os.walk(root):
         rel_d = d[len(root):]
         if d != root and has_ctrl(os.path.basename(d)):
             odd += 1
+        if d != root and not has_ctrl(rel_d) and \
+                any(fnmatch.fnmatchcase(os.path.basename(d).lower(), pat) for pat in PY_DIRS):
+            pys.add(py_record(rel_d))
         if d == root:
             dns[:] = [x for x in dns if x not in (b"proc", b"sys", b"dev")]
         for fn in fns:
@@ -470,7 +489,7 @@ def expected_tree(root):
             s = classify(p)
             if s:
                 bins[rel] = s
-    return bins, odd
+    return bins, pys, odd
 
 
 def classify(p):
@@ -531,7 +550,7 @@ FIELDS = {b"BEGIN": 1, b"END": 1, b"OS": 2, b"BIN": 3, b"PY": 4, b"DOTNETRT": 4,
 def check_probe(out, root, sh):
     lines = out.split(b"\n")
     assert lines[0] == b"BEGIN" and lines[-2:] == [b"END", b""], "%s: probe output not framed: %r" % (sh, out[-200:])
-    got, odd = {}, 0
+    got, got_py, odd = {}, set(), 0
     for ln in lines[1:-2]:
         f = ln.split(b"\t")
         assert FIELDS.get(f[0]) == len(f), "%s: malformed record %r" % (sh, ln)
@@ -548,10 +567,13 @@ def check_probe(out, root, sh):
             assert f[1] in (b"", b"tree-os"), "%s: os-release from outside the tree: %r" % (sh, ln)
         if f[0] == b"DOTNETRT":
             assert f[3] == b"absent", "%s: a symlink out of the tree was read: %r" % (sh, ln)
+        if f[0] == b"PY":
+            got_py.add((f[1], f[2], f[3]))
         if f[0] == b"ODDNAMES":
             odd = int(f[1])
-    want, want_odd = expected_tree(root)
+    want, want_py, want_odd = expected_tree(root)
     assert got == want, "%s: binaries differ\n got:  %r\n want: %r" % (sh, got, want)
+    assert got_py == want_py, "%s: Python packages differ\n got:  %r\n want: %r" % (sh, got_py, want_py)
     assert odd == want_odd, "%s: %d odd names counted, %d in the tree" % (sh, odd, want_odd)
     assert got.get(b"/usr/local/bin/node") == b"VULNERABLE"
     findings, verdict = evaluate(out)

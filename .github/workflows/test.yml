@@ -35,6 +35,10 @@ jobs:
           shellcheck --version
           shellcheck -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh tests/fake-kubectl/kubectl \
             tests/fake-image-tools/crane tests/fake-image-tools/docker tests/fake-image-tools/_map.sh
+      - name: shellcheck the probe (the POSIX sh code that runs inside containers)
+        run: |
+          bash brotli-k8s-scan.sh --print-probe > "$RUNNER_TEMP/probe.sh"
+          shellcheck -s sh "$RUNNER_TEMP/probe.sh"
       - name: bash syntax
         run: for f in brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh; do bash -n "$f"; done
       - name: python syntax

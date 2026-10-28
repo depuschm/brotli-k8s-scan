@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- A directory name that starts with a newline, or that repeats the name of a
+  real directory before a newline, could make the probe report a Python
+  package that does not exist (e.g. "Brotli 1.2.1"). It could not hide a
+  vulnerable decoder: such names are counted, so the image was `REVIEW` at
+  least. Searches now skip names with control characters entirely, and
+  package directories must match the expected name. Found by the fuzz tests.
+- The probe removes the scanned root from paths literally (a root path with
+  `*`, `?` or `[` was treated as a pattern).
+- CI also checks the probe with ShellCheck as POSIX sh, and the fuzz tests
+  now compare the reported Python packages with the scanned tree.
+
 ## 0.5.0 (2026-10-28)
 
 Security (hostile images; found while writing the fuzz tests):
