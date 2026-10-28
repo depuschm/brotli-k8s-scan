@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Security (hostile images; found while writing the fuzz tests):
+- A file named e.g. `node<TAB>.node` with fixed-looking content could override
+  the result for the real, vulnerable `/usr/local/bin/node` and turn the
+  verdict into `PATCHED`. File names with control characters are no longer
+  parsed; they are counted and reported as `REVIEW`. If a binary is reported
+  twice, the worse state wins.
+- In image, `--no-exec` and `--rootfs` scans a file name containing a newline
+  could make the probe read a file from the directory the scan was started
+  in, and symlinks such as `etc/os-release -> /etc/os-release` were followed
+  to the host. Files outside the scanned root are no longer read.
+- The probe prints records with `printf` instead of `echo` (dash's `echo`
+  turns `\n` in a name into a newline), and control characters, including
+  terminal escape sequences, are removed from everything the probe prints.
+
+Tests:
+- Fuzz tests with atheris (`tests/fuzz/`): random probe output against a model
+  of the verdict rules, and random hostile file trees against the probe with
+  `sh`, `dash`, `bash` and BusyBox. Short session in the suite, CI job `fuzz`.
+- Regression tests for the cases above.
+
 ## 0.4.0 (2026-10-27)
 
 Scanner:

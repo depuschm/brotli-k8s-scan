@@ -105,6 +105,9 @@ marks which string is Envoy's own version.
   copy is found, but its patch state is unknown.
 - Pure Go, Rust or Java reimplementations of Brotli do not contain this C code.
 - Copies inside compressed archives (e.g. jars) must be unpacked first.
+- File names with control characters (tab, newline, ...) are not scanned, as
+  they could forge the scanner's records; the image is reported as `REVIEW`
+  instead (see [SECURITY.md](../SECURITY.md#hostile-images)).
 
 ## Use it
 

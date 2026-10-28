@@ -97,6 +97,26 @@ for sh in $SHELLS; do
     rootfs dotnet10-ubuntu-fixed "$sh"; expect_eq "Ubuntu .NET 10.0.13 + patched libbrotli1: patched (version alone would say vulnerable)" "$(verdict "$OUTF")" PATCHED
     rootfs dotnet-selfcontained-ubuntu "$sh"; expect_eq "self-contained app with real .NET 8.0.32 library: vulnerable" "$(verdict "$OUTF")" VULNERABLE
   else skip "Ubuntu .NET fixtures not built"; fi
+  # hostile file names must not hide a vulnerable decoder or pull in host files
+  H="$TMP/hostile-$sh"; rm -rf "$H"; mkdir -p "$H/rf/usr/local/bin" "$H/rf/opt/app" "$H/zz"
+  cp "$BROTLI_TEST_FIXTURES/vuln/usr/local/bin/node" "$H/rf/usr/local/bin/node"
+  printf 'timedownlifeleftback\000_ERROR_FORMAT_EXUBERANT_NIBBLE\000_ERROR_FORMAT_BLOCK_SWITCH\000' > "$H/fake-patched"
+  cp "$H/fake-patched" "$H/rf/usr/local/bin/$(printf 'node\t.node')"        # tab trick
+  cp "$H/fake-patched" "$H/zz/decoy.node"                                    # a file in the directory the scan runs from
+  : > "$H/rf/opt/app/$(printf 'x.node\ndecoy.node')"                         # newline trick: 2nd line is a relative name
+  OUTF="$TMP/hostile-$sh.txt"
+  if [ "$sh" = busybox_sh ]; then (cd "$H/zz" && PATH="$BB:$PATH" BROTLI_PROBE_SHELL="busybox sh" bash "$SCAN" --rootfs "$H/rf" -o "$H/out" > "$OUTF" 2>&1)
+  else (cd "$H/zz" && BROTLI_PROBE_SHELL="$sh" bash "$SCAN" --rootfs "$H/rf" -o "$H/out" > "$OUTF" 2>&1); fi
+  expect_eq "hostile names: a crafted file cannot hide the vulnerable node" "$(verdict "$OUTF")" VULNERABLE
+  expect_has "hostile names: node still reported vulnerable" "$H/out/findings.tsv" "$(printf 'VULN\tbinary\t/usr/local/bin/node\t')"
+  expect_not "hostile names: no file outside the image is read" "$H/out/findings.tsv" "decoy.node"
+  expect_eq "hostile names: every finding has exactly 6 fields" "$(awk -F'\t' 'NR>1 && NF!=6' "$H/out/findings.tsv" | wc -l | tr -d ' ')" 0
+  # the probe itself (not only the evaluator) must skip and count such names
+  bash "$SCAN" --print-probe > "$H/probe.sh"
+  if [ "$sh" = busybox_sh ]; then (cd "$H/zz" && PATH="$BB:$PATH" busybox sh "$H/probe.sh" "$H/rf" 0 0 > "$H/raw" 2>&1)
+  else (cd "$H/zz" && "$sh" "$H/probe.sh" "$H/rf" 0 0 > "$H/raw" 2>&1); fi
+  expect_eq "hostile names: the probe never prints a name with a tab" "$(awk -F'\t' '$1=="BIN" && NF!=3' "$H/raw" | wc -l | tr -d ' ')" 0
+  expect_has "hostile names: the probe counts the 2 names it skipped" "$H/raw" "$(printf 'ODDNAMES\t2')"
   rootfs dotnet-selfcontained-synthetic-8.0.32 "$sh"; expect_eq "self-contained app, version from deps.json 8.0.32: vulnerable" "$(verdict "$OUTF")" VULNERABLE
   rootfs dotnet-selfcontained-synthetic-8.0.33 "$sh"; expect_eq "self-contained app, version from deps.json 8.0.33: patched"    "$(verdict "$OUTF")" PATCHED
   if [ -d "$BROTLI_TEST_FIXTURES/msdotnet-8.0.32" ]; then
@@ -263,6 +283,11 @@ expect_eq ".NET 9.0.21 (path) -> vuln" "$(ev 'BIN\tUNKNOWN\t/usr/share/dotnet/sh
 expect_eq ".NET 8.0.33 (path) -> ok"   "$(ev 'BIN\tUNKNOWN\t/usr/share/dotnet/shared/Microsoft.NETCore.App/8.0.33/libSystem.IO.Compression.Native.so\n' dotnet)" OK
 expect_eq "Python Brotli 1.2.1 -> ok"                          "$(ev 'PY\tBrotli\t1.2.1\t/x\n' python)" OK
 expect_eq "brotlicffi 1.2.0.1 -> vuln"                         "$(ev 'PY\tbrotlicffi\t1.2.0.1\t/x\n' python)" VULN
+expect_eq "same binary twice: vulnerable wins over patched"    "$(ev 'BIN\tVULNERABLE\t/n\nBIN\tPATCHED\t/n\n' binary)" VULN
+expect_eq "same binary twice, other order: vulnerable wins"    "$(ev 'BIN\tPATCHED\t/n\nBIN\tVULNERABLE_10X\t/n\n' binary)" VULN
+expect_eq "names with control characters -> review"            "$(ev 'ODDNAMES\t3\n' names)" REVIEW
+expect_eq "control characters from the container are dropped" \
+  "$(printf 'BEGIN\nOS\tx\033[2Jy\r\nEND\n' | bash "$SCAN" --evaluate-stdin | awk -F'\t' '$1=="O" { print $2 }')" 'x[2Jy'
 
 # --- YARA rules ----------------------------------------------------------------
 echo "YARA rules"
@@ -272,6 +297,23 @@ if [ -f "$PYLIB/.ok" ]; then
   pass=$((pass + $(grep -c '^  ok' "$TMP/yara.out"))); fail=$((fail + $(grep -c '^  FAIL' "$TMP/yara.out")))
   grep -q -e '^  ok' -e '^  FAIL' "$TMP/yara.out" || bad "yara_check.py ran" "$(tail -n 1 "$TMP/yara.out")"
 else skip "YARA tests (helpers not built)"; fi
+
+# --- fuzz tests: a short, fixed-seed session (tests/fuzz/run-fuzz.sh runs longer)
+echo "fuzz"
+FUZZ_RUNS=${BROTLI_FUZZ_RUNS:-200}
+if [ -d "$PYLIB/atheris" ]; then
+  FZ_SHELLS="sh"
+  case " $SHELLS " in *" dash "*) FZ_SHELLS="$FZ_SHELLS dash" ;; esac
+  [ -n "$BB" ] && FZ_SHELLS="$FZ_SHELLS busybox"
+  for t in evaluator probe; do
+    mkdir -p "$TMP/fuzz-$t"
+    if (cd "$TMP/fuzz-$t" && BROTLI_FUZZ_SHELLS="$FZ_SHELLS" TMPDIR="$TMP/fuzz-$t" python3 -I "$HERE/fuzz/fuzz_scanner.py" \
+          "$PYLIB" "$t" -runs="$FUZZ_RUNS" -seed=1 -len_control=0 -max_len=1024 > "$TMP/fuzz-$t.log" 2>&1)
+    then ok "fuzz $t: $FUZZ_RUNS random inputs"
+    else bad "fuzz $t" "$(grep -m 1 -E 'Error|error' "$TMP/fuzz-$t.log" | cut -c 1-300); input $(grep -m 1 '^Base64:' "$TMP/fuzz-$t.log")"; fi
+  done
+elif [ "$(uname -m)" = x86_64 ]; then skip "fuzz tests (atheris not installed: run tests/build-fixtures.sh)"
+else printf '  note  fuzz tests need x86_64 (atheris has no %s wheels)\n' "$(uname -m)"; fi
 
 echo
 echo "passed: $pass, failed: $fail"

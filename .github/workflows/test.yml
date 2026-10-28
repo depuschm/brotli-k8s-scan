@@ -33,10 +33,12 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fake-kubectl/kubectl \
+          shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh tests/fake-kubectl/kubectl \
             tests/fake-image-tools/crane tests/fake-image-tools/docker tests/fake-image-tools/_map.sh
       - name: bash syntax
-        run: for f in brotli-k8s-scan.sh tests/*.sh; do bash -n "$f"; done
+        run: for f in brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh; do bash -n "$f"; done
+      - name: python syntax
+        run: python3 -I -m py_compile tests/yara_check.py tests/fuzz/fuzz_scanner.py
 
   test:
     name: test (${{ matrix.runner }})
@@ -86,6 +88,53 @@ jobs:
         env:
           BROTLI_TEST_STRICT: "1"
         run: tests/run-tests.sh
+
+  fuzz:
+    # tests/fuzz/fuzz_scanner.py (atheris): random probe output against a model
+    # of the verdict rules, and random hostile file trees against the probe.
+    # 2 minutes per target on every change, 15 on the weekly run; offline.
+    # x86_64 only: atheris publishes no arm64 wheels.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends busybox-static dash cmake jq binutils
+
+      - name: Cache downloads and builds
+        if: github.event_name != 'schedule'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            tests/.cache/brotli
+            tests/.cache/build-*
+            tests/.cache/src-*
+            tests/.cache/py-*
+            tests/.cache/node-*
+            tests/.cache/ubuntu
+            tests/.cache/msdotnet
+            tests/.cache/runtimes
+            tests/.cache/pylib
+            tests/.cache/sarif-schema-2.1.0.json
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh', 'tests/requirements.txt') }}
+
+      - name: Build fixtures (downloads; network on)
+        env:
+          BROTLI_TEST_STRICT: "1"
+        run: tests/build-fixtures.sh
+
+      - name: Allow unprivileged user namespaces (for the offline sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Fuzz (offline; network off)
+        env:
+          SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '900' || '120' }}
+        run: tests/fuzz/run-fuzz.sh "$SECONDS_PER_TARGET"
 
   e2e:
     name: e2e (kind)

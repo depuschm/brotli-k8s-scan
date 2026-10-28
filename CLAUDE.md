@@ -29,3 +29,10 @@ Working rules for this repository:
   and rely on the CI job `e2e (kind)` for the cluster part. Failures there are
   reported as GitHub annotations (readable via the check-runs API).
 - Do not commit `tests/.cache/` or `docs/images/src/.cache/`.
+- **Image content is hostile input** (see SECURITY.md, "Hostile images"). The
+  fuzz tests (`tests/fuzz/`, x86-64 only) guard it; run
+  `tests/fuzz/run-fuzz.sh 120` after touching the probe or the evaluator. Do
+  not edit the scanner while a fuzz run is going: bash reads scripts as it
+  runs them, and the edit shows up as a bogus failure.
+- The OpenSSF Scorecard result is readable without a browser:
+  `curl -s https://api.scorecard.dev/projects/github.com/depuschm/brotli-k8s-scan`.
