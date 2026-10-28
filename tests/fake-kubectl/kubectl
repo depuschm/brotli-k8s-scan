@@ -24,6 +24,7 @@ case "${1:-}" in
     sh="${TEST_SH:-sh}"
     case "$pod" in
       distroless-*)
+        # shellcheck disable=SC2016  # the real message contains a literal $PATH
         echo 'error: Internal error occurred: failed to exec in container: exec: "sh": executable file not found in $PATH' >&2
         exit 126 ;;
       exec-*)

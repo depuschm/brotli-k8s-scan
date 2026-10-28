@@ -4,6 +4,7 @@
 
 [![tests](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml/badge.svg)](https://github.com/depuschm/brotli-k8s-scan/actions/workflows/test.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/depuschm/brotli-k8s-scan/badge)](https://scorecard.dev/viewer/?uri=github.com/depuschm/brotli-k8s-scan)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16008/badge)](https://www.bestpractices.dev/projects/16008)
 ![CVE-2026-111497](https://img.shields.io/badge/CVE--2026--111497-critical-red)
 ![license MIT](https://img.shields.io/badge/license-MIT-blue)
 ![dependencies: bash](https://img.shields.io/badge/dependencies-bash%20%2B%20coreutils-informational)
@@ -299,8 +300,11 @@ The end-to-end test also runs the image as a Kubernetes Job with
 
 ## Contributing
 
-Tests, regenerating the README images, keeping fixed versions current and
-releasing: [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug reports, wrong verdicts and ideas: [issues](https://github.com/depuschm/brotli-k8s-scan/issues).
+Security problems: privately, see [SECURITY.md](SECURITY.md). Pull requests
+are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) explains the process, the
+tests, regenerating the README images, keeping fixed versions current and
+releasing.
 
 ## License
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-28)
 
 Security (hostile images; found while writing the fuzz tests):
 - A file named e.g. `node<TAB>.node` with fixed-looking content could override
@@ -36,6 +36,11 @@ Tests:
   of the verdict rules, and random hostile file trees against the probe with
   `sh`, `dash`, `bash` and BusyBox. Short session in the suite, CI job `fuzz`.
 - Regression tests for the cases above.
+
+Project:
+- CONTRIBUTING.md: how to report bugs and contribute changes, and what a
+  change needs to be merged.
+- ShellCheck now runs at every severity; CI fails on any finding.
 
 ## 0.4.0 (2026-10-27)
 

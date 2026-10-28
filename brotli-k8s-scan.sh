@@ -50,7 +50,7 @@
 # https://github.com/depuschm/brotli-k8s-scan  (MIT)
 
 set -u
-VERSION="0.4.0"
+VERSION="0.5.0"
 REPO_URL="https://github.com/depuschm/brotli-k8s-scan"
 
 NS=""; CTX=""; DEEP=0; OUT=""; TMO=180; ROOTFS=""; NOEXEC=0; SARIF=0; PLATFORM=""; EVAL_ONLY=0
@@ -425,6 +425,7 @@ export_image() {  # $1=ref $2=dest dir $3=error file ; 0 if something was unpack
   [ "$rc" = 0 ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]
 }
 WORK=""
+# shellcheck disable=SC2317,SC2329  # called by the EXIT trap below (0.9 reports SC2317, newer SC2329)
 cleanup() { [ -n "$WORK" ] && [ -d "$WORK" ] && { chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK"; }; }
 trap cleanup EXIT
 

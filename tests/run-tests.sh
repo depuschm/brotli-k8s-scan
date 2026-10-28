@@ -153,7 +153,7 @@ cluster() {  # $1=label, rest = scanner args ; sets RC, REP, LOG
 row() { awk -F'\t' -v img="$2" '$2 == img { print $1 }' "$1/report.tsv"; }
 
 for sh in $SHELLS; do
-  [ "$sh" = busybox_sh ] && export TEST_SH="busybox sh" || export TEST_SH="$sh"
+  if [ "$sh" = busybox_sh ]; then export TEST_SH="busybox sh"; else export TEST_SH="$sh"; fi
   echo "cluster mode [$sh]"
   cluster "plain-$sh" --context test-ctx
   expect_eq "exit 1 (vulnerable found)"            "$RC" 1
@@ -203,6 +203,7 @@ done
 echo "audit helpers"
 export TEST_SH=sh
 bash "$SCAN" --print-probe > "$TMP/probe.txt"
+# shellcheck disable=SC2016  # the probe's first line, literally
 expect_has "--print-probe prints the probe"          "$TMP/probe.txt" 'R="$1"; X="${2:-1}"; D="${3:-0}"'
 expect_not "the probe contains no URLs"              "$TMP/probe.txt" "://"
 BROTLI_TEST_PROBE_DUMP="$TMP/probe-ran.txt" cluster audit -n shop
@@ -217,7 +218,7 @@ expect_eq "--dry-run --no-exec: lists 8 images to pull" "$(grep -c '^  pull ' "$
 expect_eq "--dry-run --no-exec: nothing pulled"      "$(grep -c 'crane export' "$LOG")" 0
 mkdir -p "$TMP/empty-cwd"
 (cd "$TMP/empty-cwd" && bash "$SCAN" --print-probe > /dev/null)
-expect_eq "--print-probe writes no files"             "$(ls -A "$TMP/empty-cwd" | wc -l | tr -d ' ')" 0
+expect_eq "--print-probe writes no files"             "$(find "$TMP/empty-cwd" -mindepth 1 | wc -l | tr -d ' ')" 0
 
 # --- image mode with fake crane / docker ------------------------------------
 image() {  # $1=label $2=tool, rest = scanner args ; sets RC, REP, LOG, OUTF
