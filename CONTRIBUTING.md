@@ -1,5 +1,27 @@
 # Contributing and maintenance
 
+## How to contribute
+
+- **Bugs, wrong verdicts, ideas:** open an issue at
+  <https://github.com/depuschm/brotli-k8s-scan/issues>. Please include the
+  scanner version (`./brotli-k8s-scan.sh --version`), the command, what it
+  reported and what you expected (for a binary: its package name and version).
+- **Security problems**, including a vulnerable decoder reported as
+  `PATCHED`: report them privately, see [SECURITY.md](SECURITY.md), not in a
+  public issue.
+- **Changes:** fork the repository and open a pull request against `main`.
+  Discussion happens in the pull request. A change is merged when:
+  - all CI checks pass (lint, tests on x86-64 and arm64, end-to-end on a
+    kind cluster, container image on both architectures, fuzzing);
+  - new or changed behaviour comes with a test, and the test fails without
+    the change (see [Tests](#tests));
+  - ShellCheck reports nothing, and the probe stays POSIX `sh` and
+    BusyBox-compatible;
+  - changed console output comes with rebuilt README images
+    ([README images](#readme-images));
+  - claims in the README and docs match what the scanner can show.
+- Contributions are accepted under the project's [MIT licence](LICENSE).
+
 ## Layout
 
 | Path | What |
@@ -32,7 +54,9 @@ tests/run-tests.sh        # offline: re-runs itself in a network namespace witho
   bytes and BusyBox `grep` stops at them, so strings are extracted with
   `tr -c ' -~' '\n'` first. In image and `--rootfs` mode nothing from the
   scanned filesystem may be executed.
-- Lint: `shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh tests/fake-*/*`.
+- Lint: `shellcheck -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh tests/fake-*/*`
+  at every severity (CI fails on any finding). Intended exceptions are
+  annotated in the code with `# shellcheck disable=SCxxxx  # reason`.
 - Fuzz tests (x86-64; atheris has no arm64 wheels): `tests/run-tests.sh` runs
   200 inputs per target with a fixed seed; `tests/fuzz/run-fuzz.sh [seconds]`
   runs longer (CI job `fuzz`). A failure prints the input as `Base64: ...`;

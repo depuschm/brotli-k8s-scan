@@ -79,7 +79,9 @@ build_image() {  # $1=name $2=fixture $3=shell(1/0)
 
 if has images; then
   echo "== images"
-  [ -n "$BUSYBOX" ] && file -L "$BUSYBOX" | grep -q 'statically linked' || die "static busybox" "set BUSYBOX to a statically linked busybox"
+  if [ -z "$BUSYBOX" ] || ! file -L "$BUSYBOX" | grep -q 'statically linked'; then
+    die "static busybox" "set BUSYBOX to a statically linked busybox"
+  fi
   if ! curl -fsS -m 2 "http://$REG/v2/" >/dev/null 2>&1; then
     (PORT=5001 crane registry serve --address 0.0.0.0:5001 > "$W/registry.log" 2>&1 &)
     for _ in $(seq 1 30); do curl -fsS -m 2 "http://$REG/v2/" >/dev/null 2>&1 && break; sleep 1; done
@@ -169,7 +171,9 @@ if has job; then
     die "scanner image loaded into kind" "$(tail -n 2 "$W/kind-load.log")"
   sed -e "s|image: ghcr.io/depuschm/brotli-k8s-scan:.*|image: $E2E_SCANNER_IMAGE|" \
       -e "s|args: \[\].*|args: [\"-n\", \"$NS\"]|" "$ROOT/deploy/job.yaml" > "$W/job.yaml"
-  grep -q "image: $E2E_SCANNER_IMAGE" "$W/job.yaml" && grep -q "args: \[\"-n\"" "$W/job.yaml" || die "job manifest prepared"
+  if ! grep -q "image: $E2E_SCANNER_IMAGE" "$W/job.yaml" || ! grep -q "args: \[\"-n\"" "$W/job.yaml"; then
+    die "job manifest prepared"
+  fi
   kubectl apply -f "$W/job.yaml" > "$W/job-apply.log" 2>&1 || die "deploy/job.yaml applies" "$(tail -n 3 "$W/job-apply.log")"
   for _ in $(seq 1 120); do
     st=$(kubectl -n brotli-scan get job brotli-k8s-scan -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null)

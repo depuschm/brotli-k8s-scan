@@ -3,7 +3,7 @@
 # fixture filesystem as a tar. Unknown references fail like a missing image.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=_map.sh
+# shellcheck source-path=SCRIPTDIR source=_map.sh
 . "$HERE/_map.sh"
 echo "crane $*" >> "${BROTLI_TEST_LOG:-/dev/null}"
 [ "${1:-}" = export ] || { echo "fake crane: unsupported: $*" >&2; exit 2; }

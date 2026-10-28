@@ -33,7 +33,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh tests/fake-kubectl/kubectl \
+          shellcheck -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh tests/fake-kubectl/kubectl \
             tests/fake-image-tools/crane tests/fake-image-tools/docker tests/fake-image-tools/_map.sh
       - name: bash syntax
         run: for f in brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh; do bash -n "$f"; done

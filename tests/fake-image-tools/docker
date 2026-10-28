@@ -2,7 +2,7 @@
 # Fake docker/podman for offline tests: create / export / rm.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=_map.sh
+# shellcheck source-path=SCRIPTDIR source=_map.sh
 . "$HERE/_map.sh"
 echo "docker $*" >> "${BROTLI_TEST_LOG:-/dev/null}"
 case "${1:-}" in
