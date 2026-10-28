@@ -58,7 +58,9 @@ tests/run-tests.sh        # offline: re-runs itself in a network namespace witho
   at every severity (CI fails on any finding). Intended exceptions are
   annotated in the code with `# shellcheck disable=SCxxxx  # reason`. CI
   uses Ubuntu 24.04's ShellCheck 0.9.0, which names some checks differently
-  from newer versions; a clean run with both is safest.
+  from newer versions; a clean run with both is safest. The probe is
+  checked on its own as POSIX sh:
+  `./brotli-k8s-scan.sh --print-probe > /tmp/probe.sh && shellcheck -s sh /tmp/probe.sh`.
 - Fuzz tests (x86-64; atheris has no arm64 wheels): `tests/run-tests.sh` runs
   200 inputs per target with a fixed seed; `tests/fuzz/run-fuzz.sh [seconds]`
   runs longer (CI job `fuzz`). A failure prints the input as `Base64: ...`;

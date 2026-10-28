@@ -133,8 +133,10 @@ S="${R:-/}"
 CTL=$(printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177')
 clean() { printf '%s' "$1" | tr -d '\000-\037\177'; }
 oddname() { case "$1" in *["$CTL"]*) return 0 ;; esac; return 1; }
-# Paths from find: only complete paths below the scanned root. A name that
-# contains a newline arrives in pieces; the pieces do not start with the root.
+# The searches below prune names with control characters, so find never
+# prints a name that a newline could split into pieces. As a second line of
+# defence, only complete paths below the scanned root without control
+# characters are used.
 ours() { case "$1" in "$S"*) oddname "$1" && return 1; return 0 ;; esac; return 1; }
 # Every file the probe reads must lie inside the scanned root: an image must
 # not make us read host files through a symlink (etc/os-release -> /etc/...).
@@ -171,7 +173,7 @@ if [ "$X" = 1 ]; then
       ENVOY) v=$("$p" --version 2>/dev/null | sed -n 's|.*/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[/-].*|\1|p' | head -n 1) ;;
       *)     v=$("$p" --version 2>/dev/null | head -n 1) ;;
     esac
-    rec "$1${T}$(clean "$v")${T}$(clean "${r#$R}")"
+    rec "$1${T}$(clean "$v")${T}$(clean "${r#"$R"}")"
   }
   rt NODE node; rt NODE nodejs; rt BUN bun; rt ENVOY envoy
   p=$(command -v dotnet 2>/dev/null) && [ -n "$p" ] && "$p" --list-runtimes 2>/dev/null | while IFS= read -r l; do rec "DOTNET${T}$(clean "$l")"; done
@@ -194,34 +196,40 @@ if f=$(resolve "$R/lib/apk/db/installed"); then
 fi
 
 # --- Python packages (any venv / site-packages on the filesystem) ---
-find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type d \
+find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" -o -name "*[$CTL]*" \) -prune -o -type d \
   \( -iname 'brotli-*.dist-info' -o -iname 'brotli-*.egg-info' -o -iname 'brotlicffi-*.dist-info' \
      -o -iname 'brotlicffi-*.egg-info' -o -iname 'brotlipy-*.dist-info' -o -iname 'brotlipy-*.egg-info' \) -print 2>/dev/null |
 while IFS= read -r d; do
-  ours "$d" && [ -d "$d" ] || continue
-  b=$(basename "$d"); b=${b%.dist-info}; b=${b%.egg-info}
+  if ! ours "$d" || [ ! -d "$d" ]; then continue; fi
+  b=$(basename "$d")
+  # the name must still match what find looked for (not a parent directory)
+  case "$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')" in
+    brotli-*.dist-info|brotli-*.egg-info|brotlicffi-*.dist-info|brotlicffi-*.egg-info|brotlipy-*.dist-info|brotlipy-*.egg-info) ;;
+    *) continue ;;
+  esac
+  b=${b%.dist-info}; b=${b%.egg-info}
   n=${b%%-*}; v=${b#*-}; v=${v%%-py*}
-  rec "PY${T}$n${T}$v${T}${d#$R}"
+  rec "PY${T}$n${T}$v${T}${d#"$R"}"
 done
 
 # --- .NET: runtime version from *.deps.json (shared framework and self-contained
 #     apps), and whether the Brotli native library next to it bundles Brotli
 #     ("bundled") or uses the system libbrotli ("linked"), or is absent ---
-find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f -name '*.deps.json' -print 2>/dev/null |
+find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" -o -name "*[$CTL]*" \) -prune -o -type f -name '*.deps.json' -print 2>/dev/null |
 while IFS= read -r j; do
-  ours "$j" && inside "$j" || continue
+  if ! ours "$j" || ! inside "$j"; then continue; fi
   v=$(grep -o 'Microsoft\.NETCore\.App\.Runtime\.[A-Za-z0-9_.-]*/[0-9][0-9.]*' "$j" 2>/dev/null | head -n 1 | sed 's|.*/||')
   [ -n "$v" ] || continue
   if ! l=$(resolve "$(dirname "$j")/libSystem.IO.Compression.Native.so"); then ls=absent
   elif tr -c ' -~' '\n' < "$l" 2>/dev/null | grep -q -F 'timedownlifeleftback'; then ls=bundled
   else ls=linked; fi
-  rec "DOTNETRT${T}$v${T}${j#$R}${T}$ls"
+  rec "DOTNETRT${T}$v${T}${j#"$R"}${T}$ls"
 done
 
 # --- Java: brotli4j bundles the C library inside jars (cannot fingerprint) ---
-find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f \
+find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" -o -name "*[$CTL]*" \) -prune -o -type f \
   \( -iname 'brotli4j*.jar' -o -iname 'native-linux-*.jar' -o -iname 'jvmbrotli*.jar' \) -print 2>/dev/null |
-while IFS= read -r j; do ours "$j" && [ -f "$j" ] && rec "JAR${T}${j#$R}"; done
+while IFS= read -r j; do ours "$j" && [ -f "$j" ] && rec "JAR${T}${j#"$R"}"; done
 
 # --- Binary fingerprinting ---
 classify() {
@@ -247,16 +255,16 @@ classify() {
         return 0   # only imports libbrotli symbols; the shared library is checked on its own
       fi ;;
   esac
-  rec "BIN${T}$s${T}${f#$R}"
+  rec "BIN${T}$s${T}${f#"$R"}"
 }
 {
-  find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f \
+  find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" -o -name "*[$CTL]*" \) -prune -o -type f \
     \( -name node -o -name nodejs -o -name bun -o -name envoy -o -name nginx -o -name curl -o -name dotnet \
        -o -name 'libnode.so*' -o -name 'libbrotli*' -o -name '_brotli*.so' -o -name '*brotli*.so*' \
        -o -name 'libSystem.IO.Compression.Native.so' -o -name 'libcurl.so*' -o -name '*.node' \
        -o -name 'ngx_http_brotli*' \) -print 2>/dev/null
   if [ "$D" = 1 ]; then
-    find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" \) -prune -o -type f -size +100k \
+    find "$S" -xdev \( -path "$R/proc" -o -path "$R/sys" -o -path "$R/dev" -o -name "*[$CTL]*" \) -prune -o -type f -size +100k \
       \( -perm -100 -o -name '*.so' -o -name '*.so.*' \) -print 2>/dev/null
   fi
 } | sort -u | while IFS= read -r f; do ours "$f" && inside "$f" && classify "$f"; done

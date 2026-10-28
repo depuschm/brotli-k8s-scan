@@ -104,19 +104,22 @@ for sh in $SHELLS; do
   cp "$H/fake-patched" "$H/rf/usr/local/bin/$(printf 'node\t.node')"        # tab trick
   cp "$H/fake-patched" "$H/zz/decoy.node"                                    # a file in the directory the scan runs from
   : > "$H/rf/opt/app/$(printf 'x.node\ndecoy.node')"                         # newline trick: 2nd line is a relative name
+  mkdir -p "$H/rf/$(printf '\nBrotli-1.1.0.dist-info')"                       # 1st line is the root itself (found by fuzzing)
+  mkdir -p "$H/rf/opt/Brotli-1.2.1" "$H/rf/opt/$(printf 'Brotli-1.2.1\nx.dist-info')"   # 1st line is a real, unrelated directory
   OUTF="$TMP/hostile-$sh.txt"
   if [ "$sh" = busybox_sh ]; then (cd "$H/zz" && PATH="$BB:$PATH" BROTLI_PROBE_SHELL="busybox sh" bash "$SCAN" --rootfs "$H/rf" -o "$H/out" > "$OUTF" 2>&1)
   else (cd "$H/zz" && BROTLI_PROBE_SHELL="$sh" bash "$SCAN" --rootfs "$H/rf" -o "$H/out" > "$OUTF" 2>&1); fi
   expect_eq "hostile names: a crafted file cannot hide the vulnerable node" "$(verdict "$OUTF")" VULNERABLE
   expect_has "hostile names: node still reported vulnerable" "$H/out/findings.tsv" "$(printf 'VULN\tbinary\t/usr/local/bin/node\t')"
   expect_not "hostile names: no file outside the image is read" "$H/out/findings.tsv" "decoy.node"
+  expect_not "hostile names: no Python package made up from pieces of a name" "$H/out/findings.tsv" "$(printf '\tpython\t')"
   expect_eq "hostile names: every finding has exactly 6 fields" "$(awk -F'\t' 'NR>1 && NF!=6' "$H/out/findings.tsv" | wc -l | tr -d ' ')" 0
   # the probe itself (not only the evaluator) must skip and count such names
   bash "$SCAN" --print-probe > "$H/probe.sh"
   if [ "$sh" = busybox_sh ]; then (cd "$H/zz" && PATH="$BB:$PATH" busybox sh "$H/probe.sh" "$H/rf" 0 0 > "$H/raw" 2>&1)
   else (cd "$H/zz" && "$sh" "$H/probe.sh" "$H/rf" 0 0 > "$H/raw" 2>&1); fi
   expect_eq "hostile names: the probe never prints a name with a tab" "$(awk -F'\t' '$1=="BIN" && NF!=3' "$H/raw" | wc -l | tr -d ' ')" 0
-  expect_has "hostile names: the probe counts the 2 names it skipped" "$H/raw" "$(printf 'ODDNAMES\t2')"
+  expect_has "hostile names: the probe counts the 4 names it skipped" "$H/raw" "$(printf 'ODDNAMES\t4')"
   rootfs dotnet-selfcontained-synthetic-8.0.32 "$sh"; expect_eq "self-contained app, version from deps.json 8.0.32: vulnerable" "$(verdict "$OUTF")" VULNERABLE
   rootfs dotnet-selfcontained-synthetic-8.0.33 "$sh"; expect_eq "self-contained app, version from deps.json 8.0.33: patched"    "$(verdict "$OUTF")" PATCHED
   if [ -d "$BROTLI_TEST_FIXTURES/msdotnet-8.0.32" ]; then
