@@ -10,7 +10,9 @@
 | `docs/how-detection-works.md` | the write-up behind the fingerprint |
 | `docs/images/` | README images; `docs/images/src/` regenerates them |
 | `rbac/` | RBAC examples |
-| `.github/workflows/` | `test.yml` (every change), `release.yml` (on a published release) |
+| `image/` | the container image: `build.sh` (pinned downloads, no base image), `Dockerfile`, `test.sh` |
+| `deploy/job.yaml` | the scanner as a Kubernetes Job (namespace, service account, RBAC, Job) |
+| `.github/workflows/` | `test.yml` (every change), `image.yml` (image build and test on every change, publishing on a release), `release.yml` (on a published release) |
 
 ## Tests
 
@@ -45,7 +47,11 @@ tests/run-tests.sh        # offline: re-runs itself in a network namespace witho
   `e2e (kind)`). Needs docker, kind, kubectl, crane and a static busybox.
   Without kind (e.g. no access to kind's node image), `E2E_PHASES=images`
   still checks the test images, a local registry and real `docker`/`crane`
-  image scans.
+  image scans. In CI it also runs the container image as a Job
+  (`E2E_PHASES="images cluster scan job"`, `E2E_SCANNER_IMAGE`).
+- Container image: `image/build.sh TAG` (Ubuntu with docker; builds for the
+  machine's own architecture) and `image/test.sh TAG` (offline; needs the
+  fixtures). CI job `image (amd64)` / `image (arm64)`.
 
 ## README images
 
@@ -94,17 +100,27 @@ vendor advisory in the commit message:
 - Test helpers are installed from `tests/requirements.txt` with
   `--require-hashes`; Dependabot updates it monthly (versions and hashes), or
   regenerate it by hand with the command in its header.
+- **By hand:** the versions and hashes of jq, crane and kubectl in
+  `image/build.sh` (Dependabot cannot see them; the header says where each
+  hash comes from). bash and BusyBox in the image are Ubuntu's current
+  packages at build time, so a release picks up their security updates.
 
 ## Releasing
 
-1. Bump `VERSION` in `brotli-k8s-scan.sh` and add a `CHANGELOG.md` entry.
+1. Bump `VERSION` in `brotli-k8s-scan.sh`, the image tag in
+   `deploy/job.yaml` and the version in the README's container examples, and
+   add a `CHANGELOG.md` entry.
 2. Open a pull request. `main` is protected: changes land only through pull
    requests with passing `lint`, `test (ubuntu-24.04)` and
    `test (ubuntu-24.04-arm)` checks.
 3. After merging, publish a GitHub release with the tag `vX.Y.Z` (Releases →
    Draft a new release). `release.yml` runs all tests, checks that the script
-   version matches the tag, and attaches `brotli-k8s-scan.sh`, the YARA rules,
-   `SHA256SUMS` and a signed build provenance attestation.
+   version and `deploy/job.yaml` match the tag, and attaches
+   `brotli-k8s-scan.sh`, the YARA rules, `SHA256SUMS` and a signed build
+   provenance attestation. It also publishes the container image
+   (`ghcr.io/depuschm/brotli-k8s-scan:X.Y.Z` and `latest`) with its own
+   attestation. The first time, check in GitHub → Packages that the package
+   is public.
 
 ## Reporting security problems
 

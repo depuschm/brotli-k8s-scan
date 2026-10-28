@@ -1,0 +1,129 @@
+name: image
+
+# The scanner's container image (image/build.sh: no base image, every file
+# from a checked download). Built natively on x86-64 and arm64 and tested
+# (image/test.sh, offline) on every change. On a release, release.yml calls
+# this workflow with publish: true: the images are pushed to
+# ghcr.io/depuschm/brotli-k8s-scan as one multi-architecture image with a
+# signed build provenance attestation.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      publish:
+        description: push to ghcr.io and attest (releases only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}-${{ inputs.publish || false }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/depuschm/brotli-k8s-scan
+
+jobs:
+  build:
+    name: image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write  # used only by the push step, which runs for releases only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends busybox-static dash cmake jq binutils
+
+      - name: Cache downloads and builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            tests/.cache/brotli
+            tests/.cache/build-*
+            tests/.cache/src-*
+            tests/.cache/py-*
+            tests/.cache/node-*
+            tests/.cache/ubuntu
+            tests/.cache/msdotnet
+            tests/.cache/runtimes
+            tests/.cache/pylib
+            tests/.cache/sarif-schema-2.1.0.json
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('tests/build-fixtures.sh', 'tests/requirements.txt') }}
+
+      - name: Build fixtures (downloads; network on)
+        env:
+          BROTLI_TEST_STRICT: "1"
+        run: tests/build-fixtures.sh
+
+      - name: Build the image (downloads checked against pinned hashes)
+        run: image/build.sh brotli-k8s-scan:test
+
+      - name: Test the image (offline)
+        run: image/test.sh brotli-k8s-scan:test
+
+      - name: Push the ${{ matrix.arch }} image
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          v=$(bash brotli-k8s-scan.sh --version | awk '{print $2}')
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag brotli-k8s-scan:test "$IMAGE:$v-$ARCH"
+          docker push "$IMAGE:$v-$ARCH"
+
+  publish:
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write      # push the multi-architecture image
+      id-token: write      # sign the attestation (Sigstore)
+      attestations: write  # store the attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Push the multi-architecture image (version and latest)
+        id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(bash brotli-k8s-scan.sh --version | awk '{print $2}')
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for t in "$v" latest; do
+            docker manifest create "$IMAGE:$t" "$IMAGE:$v-amd64" "$IMAGE:$v-arm64"
+            docker manifest push --purge "$IMAGE:$t" | tee "pushed-$t.txt"
+          done
+          digest=$(grep -E -o 'sha256:[0-9a-f]{64}' "pushed-$v.txt" | tail -n 1)
+          [ -n "$digest" ] || { echo "no digest in the push output"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice title=image::$IMAGE:$v@$digest"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

@@ -1,0 +1,94 @@
+# brotli-k8s-scan as a one-off Kubernetes Job, from the container image
+# (ghcr.io/depuschm/brotli-k8s-scan). Default mode: `kubectl exec` of the
+# read-only probe into one container per image, in all namespaces.
+#
+#   kubectl apply -f deploy/job.yaml
+#   kubectl -n brotli-scan wait --for=condition=complete job/brotli-k8s-scan --timeout=1h   # or: condition=failed
+#   kubectl -n brotli-scan logs job/brotli-k8s-scan     # summary, then report.tsv
+#   kubectl delete -f deploy/job.yaml                   # also removes the pods/exec permission
+#
+# The Job fails (scanner exit code 1) when a vulnerable image is found, and
+# exit code 3 means some images need review. For production use, pin the
+# image by digest (see the README, "Container image").
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: brotli-scan
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: brotli-scanner
+  namespace: brotli-scan
+---
+# pods/exec is powerful: delete this file's objects when the scan is done
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: brotli-scanner-job
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: brotli-scanner-job
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: brotli-scanner-job
+subjects:
+  - kind: ServiceAccount
+    name: brotli-scanner
+    namespace: brotli-scan
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: brotli-k8s-scan
+  namespace: brotli-scan
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: brotli-k8s-scan
+    spec:
+      serviceAccountName: brotli-scanner
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scan
+          image: ghcr.io/depuschm/brotli-k8s-scan:0.5.0
+          # the scanner's summary, then one line per image (report.tsv)
+          command: ["sh", "-c", 'brotli-k8s-scan -o /tmp/report "$@"; rc=$?; echo; cat /tmp/report/report.tsv; exit $rc', "scan"]
+          args: []  # e.g. ["-n", "my-namespace"]; see ./brotli-k8s-scan.sh --help
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -2,7 +2,8 @@ name: release
 
 # When a release is published on GitHub: run the full test suite, then attach
 # the scanner, the YARA rules and SHA256SUMS to the release, together with a
-# signed build provenance attestation (verify with `gh attestation verify`).
+# signed build provenance attestation (verify with `gh attestation verify`),
+# and publish the container image (image.yml) with its own attestation.
 
 on:
   release:
@@ -15,8 +16,35 @@ jobs:
   tests:
     uses: ./.github/workflows/test.yml
 
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that the script version and deploy/job.yaml match the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          v=$(bash brotli-k8s-scan.sh --version | awk '{print $2}')
+          [ "v$v" = "$TAG" ] || { echo "script says $v, release tag is $TAG"; exit 1; }
+          grep -q -x "          image: ghcr.io/depuschm/brotli-k8s-scan:$v" deploy/job.yaml ||
+            { echo "deploy/job.yaml does not use the image $v"; exit 1; }
+
+  image:
+    needs: [tests, version]
+    uses: ./.github/workflows/image.yml
+    with:
+      publish: true
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
   assets:
-    needs: tests
+    needs: [tests, version]
     runs-on: ubuntu-24.04
     permissions:
       contents: write      # upload release assets
@@ -26,13 +54,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Check that the script version matches the release tag
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          v=$(bash brotli-k8s-scan.sh --version | awk '{print $2}')
-          [ "v$v" = "$TAG" ] || { echo "script says $v, release tag is $TAG"; exit 1; }
 
       - name: Collect files and checksums
         run: |

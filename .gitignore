@@ -2,3 +2,4 @@ tests/.cache/
 brotli-scan-*/
 __pycache__/
 docs/images/src/.cache/
+image/.cache/

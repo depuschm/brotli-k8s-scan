@@ -72,3 +72,14 @@ Releases after v0.3.0 also carry the signed provenance as files:
 `gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan --bundle brotli-k8s-scan.sigstore.json`)
 and `brotli-k8s-scan.intoto.jsonl` (the same signed SLSA provenance as an
 in-toto envelope).
+
+The container image (from v0.5.0 on) has its own signed build provenance,
+stored in the registry next to it:
+
+```bash
+gh attestation verify oci://ghcr.io/depuschm/brotli-k8s-scan:0.5.0 --repo depuschm/brotli-k8s-scan
+```
+
+Every file in the image is listed with its SHA-256 sum in
+`/usr/share/doc/brotli-k8s-scan/CONTENTS` inside the image. For use in a
+cluster, pin the image by the digest that the command above verified.

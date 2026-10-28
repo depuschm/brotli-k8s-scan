@@ -36,3 +36,7 @@ Working rules for this repository:
   runs them, and the edit shows up as a bogus failure.
 - The OpenSSF Scorecard result is readable without a browser:
   `curl -s https://api.scorecard.dev/projects/github.com/depuschm/brotli-k8s-scan`.
+- **Container image:** `image/build.sh TAG` needs `dl.k8s.io` for kubectl; where
+  that is blocked, test with a copy of the script without the kubectl lines
+  (`image/test.sh` then reports only "contains kubectl" as failed) and rely
+  on the CI jobs `image (amd64)`, `image (arm64)` and `e2e (kind)`.

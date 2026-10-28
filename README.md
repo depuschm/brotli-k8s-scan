@@ -62,6 +62,33 @@ Useful options: `-n NAMESPACE`, `--context CTX`, `--platform linux/arm64`,
 `--deep` (also fingerprint every executable and shared library > 100 KB, to find
 statically linked copies), `--sarif`, `-o DIR`, `--dry-run`, `--print-probe`.
 
+### Container image
+
+From v0.5.0 on, every release is also an image for x86-64 and arm64,
+`ghcr.io/depuschm/brotli-k8s-scan`. It has no base image: only the script,
+static `bash` and BusyBox, `jq`, `crane` and `kubectl`
+([image/build.sh](image/build.sh) checks every download). It runs as an
+unprivileged user and carries a signed build provenance attestation.
+
+```bash
+# a cluster, from inside: a Job with its own service account and RBAC
+kubectl apply -f https://raw.githubusercontent.com/depuschm/brotli-k8s-scan/v0.5.0/deploy/job.yaml
+kubectl -n brotli-scan logs -f job/brotli-k8s-scan     # summary, then one line per image
+kubectl delete -f https://raw.githubusercontent.com/depuschm/brotli-k8s-scan/v0.5.0/deploy/job.yaml
+
+# container images, nothing to install but docker
+docker run --rm ghcr.io/depuschm/brotli-k8s-scan:0.5.0 --image node:22
+
+# this machine, read-only
+docker run --rm -v /:/host:ro ghcr.io/depuschm/brotli-k8s-scan:0.5.0 --rootfs /host
+```
+
+The Job ([deploy/job.yaml](deploy/job.yaml)) scans all namespaces by
+default, with a read-only root filesystem and no capabilities. Read it
+before applying it: it grants `pods/exec`, which `kubectl delete` removes
+again. For private registries, mount a Docker config:
+`-v ~/.docker/config.json:/tmp/.docker/config.json:ro`.
+
 Example: a cluster scan. One container per image is checked, and every
 finding names the workloads to rebuild.
 
@@ -166,6 +193,7 @@ A scanner that runs inside your production pods should be easy to check:
 | What | How |
 |---|---|
 | The file is the one this repository built | `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify brotli-k8s-scan.sh --repo depuschm/brotli-k8s-scan` (signed build provenance from GitHub Actions; releases after v0.3.0 also attach it as `.sigstore.json` / `.intoto.jsonl`) |
+| The container image is the one this repository built | `gh attestation verify oci://ghcr.io/depuschm/brotli-k8s-scan:0.5.0 --repo depuschm/brotli-k8s-scan`; its file list with SHA-256 sums is in the image: `docker run --rm --entrypoint cat ghcr.io/depuschm/brotli-k8s-scan:0.5.0 /usr/share/doc/brotli-k8s-scan/CONTENTS` |
 | Exactly what runs inside your containers | `./brotli-k8s-scan.sh --print-probe` (about 150 lines of POSIX sh; a test checks it is byte-identical to what is executed) |
 | Which pods / images it would touch | `./brotli-k8s-scan.sh --dry-run` (with `--no-exec`: which images it would pull) |
 | It needs no network | `unshare -rn ./brotli-k8s-scan.sh --rootfs /` works without any network access |
@@ -256,6 +284,18 @@ Fuzz tests ([`tests/fuzz/`](tests/fuzz/fuzz_scanner.py), with
 
 The suite runs a short session; the CI job `fuzz` runs 2 minutes per target
 on every change and 15 minutes in the weekly run (`tests/fuzz/run-fuzz.sh`).
+
+The container image is tested on every change, natively on x86-64 and arm64
+(`image/test.sh`, offline):
+
+- every test fixture must give the same verdict and findings inside the
+  image (BusyBox tools) as on the build machine;
+- a hostile image must not make the image's `tar` write outside the
+  directory it unpacks into;
+- the image's own `crane` must pull and unpack an image from a registry.
+
+The end-to-end test also runs the image as a Kubernetes Job with
+`deploy/job.yaml` on the kind cluster.
 
 ## Contributing
 

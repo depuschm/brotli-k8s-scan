@@ -33,12 +33,12 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh tests/fake-kubectl/kubectl \
+          shellcheck -S warning -x brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh tests/fake-kubectl/kubectl \
             tests/fake-image-tools/crane tests/fake-image-tools/docker tests/fake-image-tools/_map.sh
       - name: bash syntax
-        run: for f in brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh; do bash -n "$f"; done
+        run: for f in brotli-k8s-scan.sh tests/*.sh tests/fuzz/*.sh image/*.sh; do bash -n "$f"; done
       - name: python syntax
-        run: python3 -I -m py_compile tests/yara_check.py tests/fuzz/fuzz_scanner.py
+        run: python3 -I -m py_compile tests/yara_check.py tests/hostile_tar.py tests/fuzz/fuzz_scanner.py
 
   test:
     name: test (${{ matrix.runner }})
@@ -184,7 +184,13 @@ jobs:
           tar -xzf ggcr.tgz crane && rm ggcr.tgz && chmod +x kind crane
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      - name: Build the scanner's container image (downloads checked against pinned hashes)
+        run: image/build.sh brotli-k8s-scan:e2e
+
       - name: End-to-end test on a kind cluster
+        env:
+          E2E_PHASES: images cluster scan job
+          E2E_SCANNER_IMAGE: brotli-k8s-scan:e2e
         run: |
           kubectl version --client
           tests/e2e-kind.sh

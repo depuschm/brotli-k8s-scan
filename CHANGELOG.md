@@ -16,7 +16,22 @@ Security (hostile images; found while writing the fuzz tests):
   turns `\n` in a name into a newline), and control characters, including
   terminal escape sequences, are removed from everything the probe prints.
 
+Container image:
+- `ghcr.io/depuschm/brotli-k8s-scan` for x86-64 and arm64, published with
+  every release, with signed build provenance. No base image: the script,
+  Ubuntu's static bash and BusyBox, jq, crane and kubectl (pinned hashes);
+  runs as user 65532. File list with SHA-256 sums inside the image.
+- `deploy/job.yaml`: the scanner as a Kubernetes Job (own namespace, service
+  account and RBAC, read-only root filesystem, no capabilities).
+- Tested on every change on both architectures: every fixture gives the same
+  result inside the image as outside, a hostile image cannot make its `tar`
+  write outside the unpack directory, and the end-to-end test runs the image
+  as a Job on a kind cluster.
+
 Tests:
+- A hostile image tar (symlinks and `../` names pointing outside the unpack
+  directory) is scanned in image mode: still vulnerable, nothing written
+  outside.
 - Fuzz tests with atheris (`tests/fuzz/`): random probe output against a model
   of the verdict rules, and random hostile file trees against the probe with
   `sh`, `dash`, `bash` and BusyBox. Short session in the suite, CI job `fuzz`.
